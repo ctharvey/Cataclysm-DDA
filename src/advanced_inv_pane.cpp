@@ -8,6 +8,7 @@
 
 #include "advanced_inv_area.h"
 #include "advanced_inv_pagination.h"
+#include "advanced_inv_source.h"
 #include "avatar.h"
 #include "cata_assert.h"
 #include "character.h"
@@ -17,13 +18,11 @@
 #include "item.h"
 #include "item_search.h"
 #include "map.h"
-#include "map_selector.h"
 #include "options.h"
 #include "pocket_type.h"
 #include "uistate.h"
 #include "units.h"
 #include "vehicle.h"
-#include "vehicle_selector.h"
 
 class item_category;
 
@@ -203,7 +202,6 @@ void advanced_inventory_pane::add_items_from_area( advanced_inv_area &square,
     if( !square.canputitems( container ) ) {
         return;
     }
-    map &m = get_map();
     avatar &u = get_avatar();
     // Existing items are *not* cleared on purpose, this might be called
     // several times in case all surrounding squares are to be shown.
@@ -245,57 +243,23 @@ void advanced_inventory_pane::add_items_from_area( advanced_inv_area &square,
             }
         }
     } else {
-        bool is_in_vehicle = square.can_store_in_vehicle() && ( in_vehicle() || vehicle_override );
-        if( is_in_vehicle ) {
-            square.volume_veh = 0_ml;
-            square.weight_veh = 0_gram;
-        } else {
-            square.volume = 0_ml;
-            square.weight = 0_gram;
-        }
-        // Should not be able to pick up items on terrain with impassable fields.
-        if( m.impassable_field_at( square.pos ) ) {
-            return;
-        }
-        const advanced_inv_area::itemstack &stacks = is_in_vehicle ?
-                square.i_stacked( square.get_vehicle_stack() ) :
-                square.i_stacked( m.i_at( square.pos ) );
+        const bool is_in_vehicle = square.can_store_in_vehicle() && ( in_vehicle() || vehicle_override );
+        advanced_inv_source_snapshot source = enumerate_advanced_inv_area_source(
+                square, is_in_vehicle, [this]( const item & it ) {
+            return is_filtered( it );
+        } );
 
-        map_cursor loc_cursor( square.pos );
-        for( size_t x = 0; x < stacks.size(); ++x ) {
-            std::vector<item_location> locs;
-            locs.reserve( stacks[x].size() );
-            for( item *const it : stacks[x] ) {
-                if( is_in_vehicle ) {
-                    locs.emplace_back( vehicle_cursor( *square.veh, square.vstor ), it );
-                } else {
-                    locs.emplace_back( loc_cursor, it );
-                    if( it->is_corpse() ) {
-                        for( item *loot : it->all_items_top( pocket_type::CONTAINER ) ) {
-                            if( !is_filtered( *loot ) ) {
-                                advanced_inv_listitem aim_item( item_location( item_location( loc_cursor, it ), loot ),
-                                                                0, 1, square.id, is_in_vehicle );
-                                square.volume += aim_item.volume;
-                                square.weight += aim_item.weight;
-                                items.push_back( aim_item );
-                            }
-                        }
-                    }
-                }
-            }
-            advanced_inv_listitem it( locs, x, square.id, is_in_vehicle );
-            if( is_filtered( *it.items.front() ) ) {
-                continue;
-            }
-            if( is_in_vehicle ) {
-                square.volume_veh += it.volume;
-                square.weight_veh += it.weight;
-            } else {
-                square.volume += it.volume;
-                square.weight += it.weight;
-            }
-            items.push_back( it );
+        if( is_in_vehicle ) {
+            square.volume_veh = source.volume;
+            square.weight_veh = source.weight;
+        } else {
+            square.volume = source.volume;
+            square.weight = source.weight;
         }
+
+        items.insert( items.end(),
+                      std::make_move_iterator( source.rows.begin() ),
+                      std::make_move_iterator( source.rows.end() ) );
     }
 }
 
