@@ -2,9 +2,11 @@
 #ifndef CATA_SRC_ADVANCED_INV_LISTITEM_H
 #define CATA_SRC_ADVANCED_INV_LISTITEM_H
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "advanced_inv_endpoint.h"
 #include "item_location.h"
 #include "type_id.h"
 #include "units.h"
@@ -66,6 +68,11 @@ class advanced_inv_listitem
          * Is the item stored in a vehicle?
          */
         bool from_vehicle = false;
+        /**
+         * Logical storage endpoint that owns this row.  Unlike area/from_vehicle this
+         * remains meaningful when an item comes from AIM_ALL or an aliased dragged vehicle.
+         */
+        std::optional<advanced_inv_endpoint> endpoint;
         /**
          * Create an item entry.
          * @param an_item The item pointer. Must not be null.
