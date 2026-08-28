@@ -21,8 +21,7 @@ TEST_CASE( "AIM_source_snapshots_preserve_logical_transfer_boundaries",
 
     avatar &u = get_avatar();
     item backpack( itype_backpack );
-    const std::optional<std::list<item>::iterator> worn =
-        u.worn.wear_item( u, backpack, false, false );
+    const auto worn = u.worn.wear_item( u, backpack, false, false );
     REQUIRE( worn.has_value() );
 
     item_location stored_knife = u.try_add( item( itype_knife_combat ), nullptr, nullptr,
