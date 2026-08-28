@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "advanced_inv_area.h"
 #include "avatar.h"
 #include "character_attire.h"
 #include "flag.h"
@@ -76,6 +75,16 @@ std::vector<std::vector<item_location>> stack_container_items(
     return result;
 }
 
+void append_snapshot( advanced_inv_source_snapshot &target,
+                      advanced_inv_source_snapshot source )
+{
+    target.volume += source.volume;
+    target.weight += source.weight;
+    target.rows.insert( target.rows.end(),
+                        std::make_move_iterator( source.rows.begin() ),
+                        std::make_move_iterator( source.rows.end() ) );
+}
+
 void append_visible_row( advanced_inv_source_snapshot &snapshot,
                          advanced_inv_listitem row,
                          const advanced_inv_filter_predicate &is_filtered )
@@ -86,6 +95,12 @@ void append_visible_row( advanced_inv_source_snapshot &snapshot,
     snapshot.volume += row.volume;
     snapshot.weight += row.weight;
     snapshot.rows.push_back( std::move( row ) );
+}
+
+bool endpoint_is_excluded( const std::optional<advanced_inv_endpoint> &candidate,
+                           const std::optional<advanced_inv_endpoint> &excluded )
+{
+    return candidate.has_value() && excluded.has_value() && *candidate == *excluded;
 }
 } // namespace
 
@@ -222,6 +237,42 @@ advanced_inv_source_snapshot enumerate_advanced_inv_area_source(
         append_visible_row( result,
                             advanced_inv_listitem( locations, stack_index, square.id, in_vehicle ),
                             is_filtered );
+    }
+
+    return result;
+}
+
+advanced_inv_source_snapshot enumerate_advanced_inv_around_sources(
+    std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &areas,
+    const std::optional<advanced_inv_endpoint> &excluded_endpoint,
+    const advanced_inv_filter_predicate &is_filtered )
+{
+    advanced_inv_source_snapshot result;
+
+    for( int i = AIM_SOUTHWEST; i <= AIM_NORTHEAST; ++i ) {
+        advanced_inv_area &area = areas[static_cast<aim_location>( i )];
+
+        // Preserve legacy AIM_ALL ordering: vehicle cargo rows for a square first,
+        // then ground rows for that same square.
+        if( area.can_store_in_vehicle() ) {
+            const std::optional<advanced_inv_endpoint> cargo_endpoint = area.get_endpoint( true );
+            if( !endpoint_is_excluded( cargo_endpoint, excluded_endpoint ) ) {
+                advanced_inv_source_snapshot cargo = enumerate_advanced_inv_area_source(
+                        area, true, is_filtered );
+                area.volume_veh = cargo.volume;
+                area.weight_veh = cargo.weight;
+                append_snapshot( result, std::move( cargo ) );
+            }
+        }
+
+        const std::optional<advanced_inv_endpoint> ground_endpoint = area.get_endpoint( false );
+        if( !endpoint_is_excluded( ground_endpoint, excluded_endpoint ) ) {
+            advanced_inv_source_snapshot ground = enumerate_advanced_inv_area_source(
+                    area, false, is_filtered );
+            area.volume = ground.volume;
+            area.weight = ground.weight;
+            append_snapshot( result, std::move( ground ) );
+        }
     }
 
     return result;
