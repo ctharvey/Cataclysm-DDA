@@ -1,5 +1,6 @@
 #include "advanced_inv_move_all.h"
 
+#include <algorithm>
 #include <climits>
 
 #include "advanced_inv_area.h"
@@ -81,4 +82,72 @@ bool advanced_inv_move_all_key_before(
         return destination_is_inventory ? lhs.second > rhs.second : lhs.second < rhs.second;
     }
     return destination_is_inventory ? lhs.first > rhs.first : lhs.first < rhs.first;
+}
+
+advanced_inv_move_all_selection select_advanced_inv_move_all_items(
+    Character &player, const std::vector<advanced_inv_listitem> &rows,
+    const advanced_inv_area &destination_area,
+    const item_location &destination_container, bool forbid_buckets,
+    advanced_inv_move_all_priority priority, bool destination_is_inventory )
+{
+    advanced_inv_move_all_selection result;
+
+    for( const advanced_inv_listitem &row : rows ) {
+        if( row.items.empty() ) {
+            continue;
+        }
+
+        // Preserve the legacy row-level check exactly. If the destination container is
+        // the front of a displayed stack, the whole displayed stack is skipped.
+        if( destination_container && row.items.front() == destination_container ) {
+            continue;
+        }
+
+        for( const item_location &it : row.items ) {
+            const advanced_inv_move_all_disposition disposition =
+                assess_advanced_inv_move_all_item( player, it, destination_area,
+                        destination_container, forbid_buckets );
+
+            switch( disposition ) {
+                case advanced_inv_move_all_disposition::normal:
+                case advanced_inv_move_all_disposition::favorite: {
+                    advanced_inv_move_all_candidate candidate;
+                    candidate.location = it;
+                    candidate.count = it->count();
+                    candidate.sort_key = advanced_inv_move_all_key( *it, priority );
+                    if( disposition == advanced_inv_move_all_disposition::favorite ) {
+                        result.favorites.push_back( std::move( candidate ) );
+                    } else {
+                        result.normal.push_back( std::move( candidate ) );
+                    }
+                    break;
+                }
+                case advanced_inv_move_all_disposition::defer_bucket:
+                    // Legacy behavior remembers the last encountered bucket.
+                    result.deferred_bucket = it;
+                    break;
+                case advanced_inv_move_all_disposition::defer_wielded:
+                    result.deferred_wielded = true;
+                    break;
+                case advanced_inv_move_all_disposition::skip_destination_item:
+                case advanced_inv_move_all_disposition::skip_liquid_or_gas:
+                case advanced_inv_move_all_disposition::skip_destination_rejected:
+                case advanced_inv_move_all_disposition::skip_nonempty_corpse:
+                    break;
+            }
+        }
+    }
+
+    if( priority != advanced_inv_move_all_priority::none ) {
+        const auto compare = [destination_is_inventory](
+        const advanced_inv_move_all_candidate & lhs,
+        const advanced_inv_move_all_candidate & rhs ) {
+            return advanced_inv_move_all_key_before( lhs.sort_key, rhs.sort_key,
+                                                     destination_is_inventory );
+        };
+        std::sort( result.normal.begin(), result.normal.end(), compare );
+        std::sort( result.favorites.begin(), result.favorites.end(), compare );
+    }
+
+    return result;
 }
