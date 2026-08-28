@@ -29,11 +29,20 @@ std::optional<advanced_inv_endpoint> endpoint_for_item( const item_location &loc
             break;
     }
 
-    switch( loc.where_recursive() ) {
+    // Some AIM rows expose contents of an item that itself lives on the map or in
+    // vehicle cargo (for example corpse contents).  The nested item_location does
+    // not necessarily retain the vehicle cursor, so resolve the top-level owner
+    // before determining the storage endpoint.
+    item_location storage_loc = loc;
+    while( storage_loc.has_parent() ) {
+        storage_loc = storage_loc.parent_item();
+    }
+
+    switch( storage_loc.where() ) {
         case item_location::type::map:
-            return advanced_inv_endpoint::ground( loc.pos_bub( get_map() ) );
+            return advanced_inv_endpoint::ground( storage_loc.pos_bub( get_map() ) );
         case item_location::type::vehicle: {
-            const vehicle_cursor *cursor = loc.veh_cursor();
+            const vehicle_cursor *cursor = storage_loc.veh_cursor();
             if( cursor != nullptr ) {
                 return advanced_inv_endpoint::vehicle_cargo( &cursor->veh,
                         static_cast<int>( cursor->part ) );
