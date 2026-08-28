@@ -64,6 +64,26 @@ class advanced_inventory_pane
         std::optional<advanced_inv_endpoint> get_endpoint( const advanced_inv_area &square ) const {
             return square.get_endpoint( in_vehicle(), container );
         }
+        /**
+         * Resolve this pane directly against the controller's AIM area table.
+         * Aggregate/navigation views intentionally return std::nullopt.
+         */
+        std::optional<advanced_inv_endpoint> get_endpoint(
+            const std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &squares ) const {
+            if( area >= NUM_AIM_LOCATIONS ) {
+                return std::nullopt;
+            }
+            return get_endpoint( squares[area] );
+        }
+        /**
+         * Compare two concrete pane endpoints. Aggregate views never compare equal.
+         */
+        bool same_endpoint_as( const advanced_inventory_pane &other,
+                               const std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &squares ) const {
+            const std::optional<advanced_inv_endpoint> lhs = get_endpoint( squares );
+            const std::optional<advanced_inv_endpoint> rhs = other.get_endpoint( squares );
+            return lhs.has_value() && rhs.has_value() && *lhs == *rhs;
+        }
         advanced_inv_pane_save_state *save_state;
         void save_settings() const;
         void load_settings( int saved_area_idx,
