@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <iterator>
 #include <list>
+#include <set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -15,11 +17,46 @@
 #include "map.h"
 #include "map_selector.h"
 #include "pocket_type.h"
+#include "type_id.h"
 #include "vehicle.h"
 #include "vehicle_selector.h"
 
 namespace
 {
+using raw_item_stacks = std::vector<std::vector<item *>>;
+
+template<typename T>
+raw_item_stacks stack_area_items( T items )
+{
+    // Preserve the original advanced_inv_area::i_stacked algorithm exactly while
+    // moving ownership of source shaping out of the area descriptor.
+    raw_item_stacks stacks;
+    std::unordered_map<itype_id, std::set<int>> cache;
+    for( item &elem : items ) {
+        const itype_id id = elem.typeId();
+        auto iter = cache.find( id );
+        bool got_stacked = false;
+        if( iter != cache.end() ) {
+            for( const int &idx : iter->second ) {
+                for( item *&it : stacks[idx] ) {
+                    if( ( got_stacked = it->display_stacked_with( elem ) ) ) {
+                        stacks[idx].push_back( &elem );
+                        break;
+                    }
+                }
+                if( got_stacked ) {
+                    break;
+                }
+            }
+        }
+        if( !got_stacked ) {
+            cache[id].insert( stacks.size() );
+            stacks.push_back( { &elem } );
+        }
+    }
+    return stacks;
+}
+
 std::vector<std::vector<item_location>> stack_container_items(
     const item_location &parent, std::list<item *> item_list )
 {
@@ -148,9 +185,9 @@ advanced_inv_source_snapshot enumerate_advanced_inv_area_source(
         return result;
     }
 
-    const advanced_inv_area::itemstack &stacks = in_vehicle ?
-            square.i_stacked( square.get_vehicle_stack() ) :
-            square.i_stacked( here.i_at( square.pos ) );
+    const raw_item_stacks stacks = in_vehicle ?
+            stack_area_items( square.get_vehicle_stack() ) :
+            stack_area_items( here.i_at( square.pos ) );
 
     map_cursor map_loc( square.pos );
     for( size_t stack_index = 0; stack_index < stacks.size(); ++stack_index ) {
