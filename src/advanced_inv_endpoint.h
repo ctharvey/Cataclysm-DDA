@@ -20,6 +20,7 @@ class vehicle;
 enum class advanced_inv_endpoint_kind : std::uint8_t {
     inventory,
     worn,
+    wielded,
     ground,
     vehicle_cargo,
     container
@@ -34,6 +35,10 @@ class advanced_inv_endpoint
 
         static advanced_inv_endpoint worn() {
             return advanced_inv_endpoint( advanced_inv_endpoint_kind::worn );
+        }
+
+        static advanced_inv_endpoint wielded() {
+            return advanced_inv_endpoint( advanced_inv_endpoint_kind::wielded );
         }
 
         static advanced_inv_endpoint ground( const tripoint_bub_ms &pos ) {
@@ -67,6 +72,7 @@ class advanced_inv_endpoint
             switch( kind_ ) {
                 case advanced_inv_endpoint_kind::inventory:
                 case advanced_inv_endpoint_kind::worn:
+                case advanced_inv_endpoint_kind::wielded:
                     return true;
                 case advanced_inv_endpoint_kind::ground:
                     return pos_ == other.pos_;
