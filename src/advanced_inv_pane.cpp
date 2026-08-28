@@ -11,6 +11,7 @@
 #include "advanced_inv_storage.h"
 #include "avatar.h"
 #include "cata_assert.h"
+#include "character.h"
 #include "enums.h"
 #include "item.h"
 #include "item_search.h"
@@ -300,12 +301,19 @@ units::volume advanced_inventory_pane::free_volume( const advanced_inv_area &squ
 
 units::mass advanced_inventory_pane::free_weight_capacity() const
 {
+    // This method lacks the area descriptor needed by inspect_advanced_inv_storage().
+    // Keep the legacy behavior until the controller passes a concrete destination here.
     cata_assert( area != AIM_ALL );
-    const std::optional<advanced_inv_storage_state> storage =
-        inspect_advanced_inv_storage( get_map().get_abs_sub().z() == get_map().get_abs_sub().z()
-                                      ? advanced_inv_area( area ) : advanced_inv_area( area ),
-                                      in_vehicle(), container );
-    return storage.has_value() ? storage->free_weight : 0_gram;
+    if( area == AIM_CONTAINER ) {
+        if( !container ) {
+            return 0_gram;
+        }
+        return container->get_remaining_weight_capacity();
+    } else if( area == AIM_INVENTORY || area == AIM_WORN ) {
+        return get_player_character().free_weight_capacity();
+    } else {
+        return units::mass::max();
+    }
 }
 
 void advanced_inventory_pane::set_filter( const std::string &new_filter )
