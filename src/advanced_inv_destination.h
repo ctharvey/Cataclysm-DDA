@@ -3,7 +3,10 @@
 #define CATA_SRC_ADVANCED_INV_DESTINATION_H
 
 #include <cstdint>
+#include <optional>
+#include <string>
 
+#include "advanced_inv_endpoint.h"
 #include "item_location.h"
 
 class advanced_inv_area;
@@ -22,9 +25,8 @@ enum class advanced_inv_destination_limit : std::uint8_t {
 /**
  * Read-only result of AIM's quantity/capacity checks for one destination.
  *
- * This intentionally mirrors the current query_charges ordering. It does not yet
- * include item-specific container acceptance, NO_RELOAD, wear/wield validity,
- * prompts, or activity selection.
+ * This intentionally mirrors the current query_charges ordering. It does not include
+ * prompts or activity selection.
  */
 struct advanced_inv_destination_assessment {
     int requested = 0;
@@ -37,6 +39,33 @@ struct advanced_inv_destination_assessment {
 
     bool is_limited() const {
         return accepted < requested;
+    }
+};
+
+enum class advanced_inv_destination_acceptance_kind : std::uint8_t {
+    allowed,
+    invalid_destination,
+    no_reload,
+    container_rejected,
+    wear_rejected,
+    wield_instead
+};
+
+/**
+ * Item-policy result for a destination, separate from quantity/capacity.
+ */
+struct advanced_inv_destination_acceptance {
+    advanced_inv_destination_acceptance_kind kind =
+        advanced_inv_destination_acceptance_kind::invalid_destination;
+    std::string reason;
+    std::optional<advanced_inv_endpoint> alternative_destination;
+
+    bool accepted() const {
+        return kind == advanced_inv_destination_acceptance_kind::allowed;
+    }
+
+    bool has_alternative() const {
+        return alternative_destination.has_value();
     }
 };
 
@@ -54,5 +83,15 @@ struct advanced_inv_destination_assessment {
 advanced_inv_destination_assessment assess_advanced_inv_destination_capacity(
     const advanced_inv_area &area, bool in_vehicle, const item_location &container,
     const item &it, int requested, bool stacks_with_existing_charges = false );
+
+/**
+ * Assess destination item-policy rules without changing quantity or assigning activities.
+ *
+ * Current scope mirrors move-one rules for destination validity, container insertion,
+ * and worn->wield fallback. Move-all-specific direct-container filtering remains separate.
+ */
+advanced_inv_destination_acceptance assess_advanced_inv_destination_acceptance(
+    const advanced_inv_area &area, bool in_vehicle, const item_location &container,
+    const item &it );
 
 #endif // CATA_SRC_ADVANCED_INV_DESTINATION_H
