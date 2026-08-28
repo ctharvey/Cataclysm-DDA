@@ -8,7 +8,11 @@
 #include "character.h"
 #include "item.h"
 #include "itype.h"
+#include "ret_val.h"
+#include "type_id.h"
 #include "units.h"
+
+static const flag_id json_flag_NO_RELOAD( "NO_RELOAD" );
 
 advanced_inv_destination_assessment assess_advanced_inv_destination_capacity(
     const advanced_inv_area &area, bool in_vehicle, const item_location &container,
@@ -105,5 +109,70 @@ advanced_inv_destination_assessment assess_advanced_inv_destination_capacity(
                        advanced_inv_destination_limit::none;
     }
 
+    return result;
+}
+
+advanced_inv_destination_acceptance assess_advanced_inv_destination_acceptance(
+    const advanced_inv_area &area, bool in_vehicle, const item_location &container,
+    const item &it )
+{
+    advanced_inv_destination_acceptance result;
+
+    const std::optional<advanced_inv_endpoint> endpoint = area.get_endpoint( in_vehicle, container );
+    if( !endpoint.has_value() || !area.canputitems( container ) ) {
+        result.kind = advanced_inv_destination_acceptance_kind::invalid_destination;
+        return result;
+    }
+
+    if( area.id == AIM_CONTAINER ) {
+        if( !container || !container->is_container() ) {
+            result.kind = advanced_inv_destination_acceptance_kind::invalid_destination;
+            return result;
+        }
+        if( container->has_flag( json_flag_NO_RELOAD ) ) {
+            result.kind = advanced_inv_destination_acceptance_kind::no_reload;
+            return result;
+        }
+
+        item candidate = it;
+        ret_val<void> can_contain = container->can_contain( candidate );
+        if( can_contain.success() ) {
+            can_contain = container.parents_can_contain_recursive( &candidate );
+        }
+        if( !can_contain.success() ) {
+            result.kind = advanced_inv_destination_acceptance_kind::container_rejected;
+            result.reason = can_contain.str();
+            return result;
+        }
+    }
+
+    if( area.id == AIM_WORN ) {
+        Character &player = get_player_character();
+        const ret_val<void> can_wear = player.can_wear( it );
+        if( can_wear.success() ) {
+            result.kind = advanced_inv_destination_acceptance_kind::allowed;
+            return result;
+        }
+
+        const ret_val<void> can_wield = player.can_wield( it );
+        if( can_wield.success() ) {
+            result.kind = advanced_inv_destination_acceptance_kind::wield_instead;
+            result.reason = can_wear.str();
+            result.alternative_destination = advanced_inv_endpoint::wielded();
+            return result;
+        }
+
+        result.kind = advanced_inv_destination_acceptance_kind::wear_rejected;
+        result.reason = can_wear.str();
+        if( !can_wield.str().empty() ) {
+            if( !result.reason.empty() ) {
+                result.reason += "\n";
+            }
+            result.reason += can_wield.str();
+        }
+        return result;
+    }
+
+    result.kind = advanced_inv_destination_acceptance_kind::allowed;
     return result;
 }
