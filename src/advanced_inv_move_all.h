@@ -28,12 +28,11 @@ enum class advanced_inv_move_all_disposition : std::uint8_t {
  */
 advanced_inv_move_all_disposition assess_advanced_inv_move_all_item(
     Character &player, const item_location &it,
-    const advanced_inv_area &destination_area, bool destination_in_vehicle,
+    const advanced_inv_area &destination_area,
     const item_location &destination_container, bool forbid_buckets );
 
 /** Current move-all bucket policy derived from a concrete destination. */
 bool advanced_inv_move_all_forbids_buckets(
-    const advanced_inv_area &destination_area, bool destination_in_vehicle,
-    const item_location &destination_container );
+    const advanced_inv_area &destination_area, bool destination_in_vehicle );
 
 #endif // CATA_SRC_ADVANCED_INV_MOVE_ALL_H
