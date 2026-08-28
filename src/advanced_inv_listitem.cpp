@@ -4,6 +4,7 @@
 
 #include "advanced_inv_area.h"
 #include "auto_pickup.h"
+#include "avatar.h"
 #include "cata_assert.h"
 #include "item.h"
 #include "item_tname.h"
@@ -19,6 +20,9 @@ std::optional<advanced_inv_endpoint> endpoint_for_item( const item_location &loc
         case AIM_INVENTORY:
             return advanced_inv_endpoint::inventory();
         case AIM_WORN:
+            if( loc == get_avatar().get_wielded_item() ) {
+                return advanced_inv_endpoint::wielded();
+            }
             return advanced_inv_endpoint::worn();
         case AIM_CONTAINER:
             if( loc.has_parent() ) {
