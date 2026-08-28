@@ -3,11 +3,13 @@
 #define CATA_SRC_ADVANCED_INV_MOVE_ALL_H
 
 #include <cstdint>
+#include <utility>
 
 #include "item_location.h"
 
 class Character;
 class advanced_inv_area;
+class item;
 
 enum class advanced_inv_move_all_disposition : std::uint8_t {
     normal,
@@ -19,6 +21,14 @@ enum class advanced_inv_move_all_disposition : std::uint8_t {
     defer_bucket,
     defer_wielded
 };
+
+enum class advanced_inv_move_all_priority : std::uint8_t {
+    none,
+    volume,
+    weight
+};
+
+using advanced_inv_move_all_sort_key = std::pair<int, int>;
 
 /**
  * Classify one item according to current move-all row policy.
@@ -34,5 +44,18 @@ advanced_inv_move_all_disposition assess_advanced_inv_move_all_item(
 /** Current move-all bucket policy derived from a concrete destination. */
 bool advanced_inv_move_all_forbids_buckets(
     const advanced_inv_area &destination_area, bool destination_in_vehicle );
+
+/** Mirror move-all's volume/weight candidate key. */
+advanced_inv_move_all_sort_key advanced_inv_move_all_key(
+    const item &it, advanced_inv_move_all_priority priority );
+
+/**
+ * Mirror move-all's actor-aware ordering. Pickup processes from the back, so inventory
+ * destinations intentionally reverse the key ordering used by other destinations.
+ */
+bool advanced_inv_move_all_key_before(
+    const advanced_inv_move_all_sort_key &lhs,
+    const advanced_inv_move_all_sort_key &rhs,
+    bool destination_is_inventory );
 
 #endif // CATA_SRC_ADVANCED_INV_MOVE_ALL_H
