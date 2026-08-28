@@ -79,6 +79,53 @@ The endpoint-aware pane APIs now include:
 The no-argument `free_weight_capacity()` remains temporarily because existing controller
 call sites do not pass the destination area yet.
 
+### 4. Destination assessment
+
+Implemented in `advanced_inv_destination.{h,cpp}`.
+
+The destination decision is split into two read-only questions.
+
+**Capacity/quantity** mirrors the current `query_charges()` ordering and reports:
+
+- requested amount;
+- accepted amount;
+- the limiting reason;
+- inventory-pocket limits;
+- generic volume/weight limits;
+- map/vehicle item-count limits;
+- pickup/overburden limits;
+- worn-slot limits.
+
+**Acceptance** handles item-policy rules independently of quantity:
+
+- invalid destination;
+- container `NO_RELOAD`;
+- container `can_contain` / parent-container constraints;
+- wear validity;
+- the existing wear-to-wield fallback.
+
+The capacity mirror intentionally preserves the current worn-slot behavior where the final
+worn-slot calculation uses the original requested amount and can overwrite an earlier
+pickup-weight limitation. That is recorded as a behavior question, not silently changed as
+part of refactoring.
+
+### 5. Transfer classification
+
+Implemented in `advanced_inv_transfer.{h,cpp}`.
+
+Endpoint-to-endpoint movement can now be classified without mutating game state or assigning
+an activity:
+
+- insert into container;
+- drop from character;
+- pick up to inventory;
+- move between world endpoints;
+- wear;
+- wield;
+- take off to inventory.
+
+Same-endpoint movement is rejected at the planning layer.
+
 ## Characterization coverage added
 
 The current branch adds focused coverage for:
@@ -89,7 +136,12 @@ The current branch adds focused coverage for:
 - direct source snapshots for inventory/worn/container;
 - wielded rows having a distinct endpoint inside the worn view;
 - endpoint-aware ground/cargo counts and free volume;
-- aggregate source metrics after filtering.
+- aggregate source metrics after filtering;
+- destination capacity using the actual ground/cargo endpoint;
+- inventory pocket availability;
+- worn acceptance and wield fallback;
+- direct container acceptance;
+- endpoint-driven transfer classification.
 
 ## Responsibilities still embedded in legacy owners
 
@@ -125,93 +177,86 @@ sources.
 
 ### `advanced_inventory`
 
-Still owns most high-risk behavior:
+Still owns the orchestration and mutation-heavy behavior:
 
-- `AIM_ALL` controller orchestration;
+- legacy `AIM_ALL` controller orchestration;
 - same-source/destination guards;
-- destination selection;
-- transfer quantity calculation;
-- move-one policy;
+- destination-selection UI;
+- legacy transfer quantity calculation and prompts;
+- move-one orchestration;
 - move-all policy;
 - favorite/bucket/liquid/corpse/wield special cases;
-- activity actor selection;
+- activity actor construction/assignment;
 - activity re-entry state;
 - UI action dispatch.
 
-This is now the main concentration of domain behavior.
+The important difference is that endpoint identity, source enumeration, destination
+assessment, and transfer classification now exist outside this controller and can replace
+those reconstructions mechanically.
 
 ## Next extraction order
 
-### A. Destination acceptance
+### A. Move-all policy
 
-Extract the answer to:
+Move-all still combines source eligibility, destination eligibility, favorites, buckets,
+corpses, wielded items, sorting for partial capacity, user confirmation, and activity
+selection.
 
-> Can this concrete destination accept this item, and what limits the amount?
-
-The current answer is distributed across:
-
-- `advanced_inv_area::canputitems()`;
-- `advanced_inventory_pane::free_volume()`;
-- `free_weight_capacity()`;
-- `Character::can_stash_partial()`;
-- container `can_contain*()` checks;
-- map/vehicle item-count limits;
-- worn/wield checks.
-
-Target shape:
+The next seam should separate per-row policy from orchestration. At minimum it should answer:
 
 ```text
-endpoint + item + requested count
-              |
-              v
-      destination assessment
-              |
-      +-------+-------+
-      |               |
-   allowed         rejected
-      |
- max count + limiting reason
+row + destination
+        |
+        v
+ move-all disposition
+        |
+        +-- eligible normally
+        +-- favorite
+        +-- liquid/gas: skip
+        +-- non-empty corpse: skip
+        +-- bucket would spill: defer/special handling
+        +-- wielded: defer/special handling
+        +-- destination rejects item: skip
 ```
 
-This should be read-only and reusable by move-one and move-all.
+This makes the remaining move-all function a coordinator instead of the owner of every rule.
 
-### B. Transfer request / plan
+### B. Controller migration
 
-Separate deciding *what should happen* from assigning a `player_activity`.
+The seams now exist for the first mechanical controller replacements:
 
-A transfer request should describe at least:
-
-- concrete source endpoint / row;
-- concrete destination endpoint;
-- requested quantity;
-- resulting accepted quantity;
-- special handling requirement (drop, pickup, vehicle move, container insert, wear, wield).
-
-The first version should mirror current activity selection rather than redesign it.
-
-### C. Controller migration
-
-Once endpoint/source/destination helpers exist, replace controller reconstruction sites:
-
-1. `recalc_pane()` `AIM_ALL` enumeration with `enumerate_advanced_inv_around_sources()`;
-2. move-one same-endpoint guard with row endpoint vs destination endpoint;
-3. move-all same-endpoint guards with pane endpoint equality;
-4. item-count/capacity reads with endpoint-aware pane/storage APIs;
-5. `query_destination()` square exclusion with endpoint exclusion.
+1. `recalc_pane()` `AIM_ALL` enumeration -> `enumerate_advanced_inv_around_sources()`;
+2. move-one same-endpoint guard -> row endpoint vs destination endpoint;
+3. move-all same-endpoint guards -> pane endpoint equality;
+4. item-count/capacity reads -> endpoint-aware pane/storage APIs;
+5. `query_charges()` quantity math -> destination capacity assessment;
+6. wear/container policy -> destination acceptance;
+7. activity-routing branches -> transfer classification;
+8. `query_destination()` square exclusion -> endpoint exclusion.
 
 After those migrations, `advanced_inv_area::is_same()` should be removable as an inventory
 identity concept.
 
-### D. Execution adapter
+### C. Execution adapter
 
-Only after planning is separated should activity assignment be extracted into a small
-execution adapter around:
+Once controller routing consumes transfer plans, extract activity construction/assignment
+behind a small execution adapter around:
 
 - `insert_item_activity_actor`;
 - `drop_activity_actor`;
 - `pickup_activity_actor`;
 - `move_items_activity_actor`;
 - wear/wield activity actors.
+
+### D. Remove legacy APIs
+
+After controller migration:
+
+- remove `advanced_inv_area::get_item_count()`;
+- remove `advanced_inv_area::is_same()`;
+- remove no-area `advanced_inventory_pane::free_weight_capacity()`;
+- remove stale AIM-specific declarations from `avatar` / `outfit`;
+- decide whether `from_vehicle` can be replaced entirely by row endpoint kind.
 
 ## Deliberately not tackled yet
 
