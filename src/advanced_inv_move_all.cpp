@@ -1,5 +1,7 @@
 #include "advanced_inv_move_all.h"
 
+#include <climits>
+
 #include "advanced_inv_area.h"
 #include "character.h"
 #include "item.h"
@@ -52,4 +54,31 @@ bool advanced_inv_move_all_forbids_buckets(
            destination_area.id == AIM_WORN ||
            destination_area.id == AIM_CONTAINER ||
            destination_in_vehicle;
+}
+
+advanced_inv_move_all_sort_key advanced_inv_move_all_key(
+    const item &it, advanced_inv_move_all_priority priority )
+{
+    if( priority == advanced_inv_move_all_priority::none ) {
+        return { 0, 0 };
+    }
+
+    const int weight = it.weight().value() > INT_MAX ? INT_MAX :
+                       static_cast<int>( it.weight().value() );
+    const int volume = it.volume().value();
+
+    return priority == advanced_inv_move_all_priority::volume ?
+           advanced_inv_move_all_sort_key( volume, weight ) :
+           advanced_inv_move_all_sort_key( weight, volume );
+}
+
+bool advanced_inv_move_all_key_before(
+    const advanced_inv_move_all_sort_key &lhs,
+    const advanced_inv_move_all_sort_key &rhs,
+    bool destination_is_inventory )
+{
+    if( lhs.first == rhs.first ) {
+        return destination_is_inventory ? lhs.second > rhs.second : lhs.second < rhs.second;
+    }
+    return destination_is_inventory ? lhs.first > rhs.first : lhs.first < rhs.first;
 }
