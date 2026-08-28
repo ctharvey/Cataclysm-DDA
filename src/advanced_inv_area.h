@@ -5,7 +5,6 @@
 #include <array>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include "advanced_inv_endpoint.h"
 #include "coordinates.h"
@@ -37,19 +36,16 @@ enum aim_location : char {
     AIM_AROUND_END = AIM_NORTHEAST
 };
 
-class item;
 class vehicle;
 class vehicle_stack;
 
 /**
- * Defines the source of item stacks.
+ * Describes a selectable Advanced Inventory area and the world storage available there.
+ * Item enumeration/stack shaping belongs to advanced_inv_source.
  */
 class advanced_inv_area
 {
     public:
-        // roll our own, to handle moving stacks better
-        using itemstack = std::vector<std::vector<item *> >;
-
         const aim_location id;
         // Used for the small overview 3x3 grid
         point hscreen = point::zero;
@@ -94,9 +90,6 @@ class advanced_inv_area
             aim_location relative_location );
 
         void init();
-
-        template <typename T>
-        advanced_inv_area::itemstack i_stacked( T items );
         int get_item_count() const;
 
         /**
