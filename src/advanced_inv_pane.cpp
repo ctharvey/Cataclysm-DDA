@@ -2,28 +2,25 @@
 
 #include <cstddef>
 #include <iterator>
-#include <list>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "advanced_inv_area.h"
 #include "advanced_inv_pagination.h"
+#include "advanced_inv_source.h"
+#include "advanced_inv_storage.h"
 #include "avatar.h"
 #include "cata_assert.h"
 #include "character.h"
-#include "character_attire.h"
 #include "enums.h"
-#include "flag.h"
 #include "item.h"
 #include "item_search.h"
 #include "map.h"
-#include "map_selector.h"
 #include "options.h"
-#include "pocket_type.h"
 #include "uistate.h"
 #include "units.h"
 #include "vehicle.h"
-#include "vehicle_selector.h"
 
 class item_category;
 
@@ -102,100 +99,6 @@ bool advanced_inventory_pane::is_filtered( const item &it ) const
     return !filter_function( it );
 }
 
-/** converts a raw list of items to "stacks" - items that are not count_by_charges that otherwise stack go into one stack */
-static std::vector<std::vector<item_location>> item_list_to_stack(
-            const item_location &parent, std::list<item *> item_list )
-{
-    std::vector<std::vector<item_location>> ret;
-    for( auto iter_outer = item_list.begin(); iter_outer != item_list.end(); ++iter_outer ) {
-        std::vector<item_location> item_stack( { item_location( parent, *iter_outer ) } );
-        for( auto iter_inner = std::next( iter_outer ); iter_inner != item_list.end(); ) {
-            if( ( *iter_outer )->display_stacked_with( **iter_inner ) ) {
-                item_stack.emplace_back( parent, *iter_inner );
-                iter_inner = item_list.erase( iter_inner );
-            } else {
-                ++iter_inner;
-            }
-        }
-        ret.push_back( item_stack );
-    }
-    return ret;
-}
-
-std::vector<advanced_inv_listitem> outfit::get_AIM_inventory( size_t &item_index, avatar &you,
-        const advanced_inventory_pane &pane, advanced_inv_area &square )
-{
-    std::vector<advanced_inv_listitem> items;
-    for( item &worn_item : worn ) {
-        if( worn_item.empty() || worn_item.has_flag( flag_NO_UNLOAD ) ) {
-            continue;
-        }
-        for( const std::vector<item_location> &it_stack : item_list_to_stack(
-                 item_location( you, &worn_item ),
-                 worn_item.all_items_top( pocket_type::CONTAINER ) ) ) {
-
-            // dont show if the content are liquids
-            if( !it_stack.empty() && it_stack.front()->made_of_from_type( phase_id::LIQUID ) &&
-                !it_stack.front()->is_frozen_liquid() ) {
-                continue;
-            }
-
-            advanced_inv_listitem adv_it( it_stack, item_index++, square.id, false );
-            if( !pane.is_filtered( *adv_it.items.front() ) ) {
-                square.volume += adv_it.volume;
-                square.weight += adv_it.weight;
-                items.push_back( adv_it );
-            }
-        }
-    }
-    return items;
-}
-
-std::vector<advanced_inv_listitem> avatar::get_AIM_inventory( const advanced_inventory_pane &pane,
-        advanced_inv_area &square )
-{
-    size_t item_index = 0;
-
-    std::vector<advanced_inv_listitem> items = worn.get_AIM_inventory( item_index, *this, pane,
-            square );
-
-    item_location weapon = get_wielded_item();
-    if( weapon && weapon->is_container() ) {
-        for( const std::vector<item_location> &it_stack : item_list_to_stack( weapon,
-                weapon->all_items_top( pocket_type::CONTAINER ) ) ) {
-
-            // dont show if the content are liquids
-            if( !it_stack.empty() && it_stack.front()->made_of_from_type( phase_id::LIQUID ) &&
-                !it_stack.front()->is_frozen_liquid() ) {
-                continue;
-            }
-
-            advanced_inv_listitem adv_it( it_stack, item_index++, square.id, false );
-            if( !pane.is_filtered( *adv_it.items.front() ) ) {
-                square.volume += adv_it.volume;
-                square.weight += adv_it.weight;
-                items.push_back( adv_it );
-            }
-        }
-    }
-    return items;
-}
-
-void outfit::add_AIM_items_from_area( avatar &you, advanced_inv_area &square,
-                                      advanced_inventory_pane &pane )
-{
-    auto iter = worn.begin();
-    for( size_t i = 0; i < worn.size(); ++i, ++iter ) {
-        advanced_inv_listitem it( item_location( you, &*iter ), i + 1, 1, square.id, false );
-        if( pane.is_filtered( *it.items.front() ) ) {
-            continue;
-        }
-        square.volume += it.volume;
-        square.weight += it.weight;
-        pane.items.push_back( it );
-    }
-}
-
 void advanced_inventory_pane::add_items_from_area( advanced_inv_area &square,
         bool vehicle_override )
 {
@@ -203,100 +106,46 @@ void advanced_inventory_pane::add_items_from_area( advanced_inv_area &square,
     if( !square.canputitems( container ) ) {
         return;
     }
-    map &m = get_map();
+
     avatar &u = get_avatar();
-    // Existing items are *not* cleared on purpose, this might be called
-    // several times in case all surrounding squares are to be shown.
+    const advanced_inv_filter_predicate filtered = [this]( const item & it ) {
+        return is_filtered( it );
+    };
+
+    // Existing items are *not* cleared on purpose.  This is called repeatedly when
+    // AIM_ALL collects its individual ground/vehicle sources.
+    advanced_inv_source_snapshot source;
     if( square.id == AIM_INVENTORY ) {
-        square.volume = 0_ml;
-        square.weight = 0_gram;
-        items = u.get_AIM_inventory( *this, square );
-    } else if( square.id == AIM_WORN ) {
-        square.volume = 0_ml;
-        square.weight = 0_gram;
+        source = enumerate_advanced_inv_inventory_source( u, filtered );
+        square.volume = source.volume;
+        square.weight = source.weight;
+        items = std::move( source.rows );
+        return;
+    }
 
-        item_location weapon = u.get_wielded_item();
-        if( weapon ) {
-            advanced_inv_listitem it( weapon, 0, 1, square.id, false );
-            if( !is_filtered( *it.items.front() ) ) {
-                square.volume += it.volume;
-                square.weight += it.weight;
-                items.push_back( it );
-            }
-        }
-
-        u.worn.add_AIM_items_from_area( u, square, *this );
+    if( square.id == AIM_WORN ) {
+        source = enumerate_advanced_inv_worn_source( u, filtered );
+        square.volume = source.volume;
+        square.weight = source.weight;
     } else if( square.id == AIM_CONTAINER ) {
-        square.volume = 0_ml;
-        square.weight = 0_gram;
-        if( container ) {
-            if( !container->is_container_empty() ) {
-                // filtering does not make sense for liquid in container
-                size_t item_index = 0;
-                for( const std::vector<item_location> &it_stack : item_list_to_stack( container,
-                        container->all_items_top() ) ) {
-                    advanced_inv_listitem adv_it( it_stack, item_index++, square.id, false );
-                    if( !is_filtered( *adv_it.items.front() ) ) {
-                        square.volume += adv_it.volume;
-                        square.weight += adv_it.weight;
-                        items.push_back( adv_it );
-                    }
-                }
-            }
-        }
+        source = enumerate_advanced_inv_container_source( container, filtered );
+        square.volume = source.volume;
+        square.weight = source.weight;
     } else {
-        bool is_in_vehicle = square.can_store_in_vehicle() && ( in_vehicle() || vehicle_override );
+        const bool is_in_vehicle = square.can_store_in_vehicle() && ( in_vehicle() || vehicle_override );
+        source = enumerate_advanced_inv_area_source( square, is_in_vehicle, filtered );
         if( is_in_vehicle ) {
-            square.volume_veh = 0_ml;
-            square.weight_veh = 0_gram;
+            square.volume_veh = source.volume;
+            square.weight_veh = source.weight;
         } else {
-            square.volume = 0_ml;
-            square.weight = 0_gram;
-        }
-        // Should not be able to pick up items on terrain with impassable fields.
-        if( m.impassable_field_at( square.pos ) ) {
-            return;
-        }
-        const advanced_inv_area::itemstack &stacks = is_in_vehicle ?
-                square.i_stacked( square.get_vehicle_stack() ) :
-                square.i_stacked( m.i_at( square.pos ) );
-
-        map_cursor loc_cursor( square.pos );
-        for( size_t x = 0; x < stacks.size(); ++x ) {
-            std::vector<item_location> locs;
-            locs.reserve( stacks[x].size() );
-            for( item *const it : stacks[x] ) {
-                if( is_in_vehicle ) {
-                    locs.emplace_back( vehicle_cursor( *square.veh, square.vstor ), it );
-                } else {
-                    locs.emplace_back( loc_cursor, it );
-                    if( it->is_corpse() ) {
-                        for( item *loot : it->all_items_top( pocket_type::CONTAINER ) ) {
-                            if( !is_filtered( *loot ) ) {
-                                advanced_inv_listitem aim_item( item_location( item_location( loc_cursor, it ), loot ),
-                                                                0, 1, square.id, is_in_vehicle );
-                                square.volume += aim_item.volume;
-                                square.weight += aim_item.weight;
-                                items.push_back( aim_item );
-                            }
-                        }
-                    }
-                }
-            }
-            advanced_inv_listitem it( locs, x, square.id, is_in_vehicle );
-            if( is_filtered( *it.items.front() ) ) {
-                continue;
-            }
-            if( is_in_vehicle ) {
-                square.volume_veh += it.volume;
-                square.weight_veh += it.weight;
-            } else {
-                square.volume += it.volume;
-                square.weight += it.weight;
-            }
-            items.push_back( it );
+            square.volume = source.volume;
+            square.weight = source.weight;
         }
     }
+
+    items.insert( items.end(),
+                  std::make_move_iterator( source.rows.begin() ),
+                  std::make_move_iterator( source.rows.end() ) );
 }
 
 void advanced_inventory_pane::fix_index()
@@ -443,27 +292,33 @@ advanced_inv_listitem *advanced_inventory_pane::get_cur_item_ptr()
     return &items[index];
 }
 
+int advanced_inventory_pane::get_item_count( const advanced_inv_area &square ) const
+{
+    const std::optional<advanced_inv_storage_state> storage =
+        inspect_advanced_inv_storage( square, in_vehicle(), container );
+    return storage.has_value() ? storage->item_count : 0;
+}
+
 units::volume advanced_inventory_pane::free_volume( const advanced_inv_area &square ) const
 {
-    // should be a specific location instead
     cata_assert( area != AIM_ALL );
-    if( area == AIM_CONTAINER ) {
-        if( !container ) {
-            return 0_ml;
-        }
-        return container->get_remaining_volume();
-    } else if( area == AIM_INVENTORY || area == AIM_WORN ) {
-        return get_player_character().free_space();
-    } else if( in_vehicle() ) {
-        return square.get_vehicle_stack().free_volume();
-    } else {
-        return get_map().free_volume( square.pos );
-    }
+    const std::optional<advanced_inv_storage_state> storage =
+        inspect_advanced_inv_storage( square, in_vehicle(), container );
+    return storage.has_value() ? storage->free_volume : 0_ml;
+}
+
+units::mass advanced_inventory_pane::free_weight_capacity( const advanced_inv_area &square ) const
+{
+    cata_assert( area != AIM_ALL );
+    const std::optional<advanced_inv_storage_state> storage =
+        inspect_advanced_inv_storage( square, in_vehicle(), container );
+    return storage.has_value() ? storage->free_weight : 0_gram;
 }
 
 units::mass advanced_inventory_pane::free_weight_capacity() const
 {
-    // should be a specific location instead
+    // Legacy overload: this method lacks the area descriptor needed by the endpoint-aware
+    // storage inspector. Keep it until all controller call sites pass the concrete area.
     cata_assert( area != AIM_ALL );
     if( area == AIM_CONTAINER ) {
         if( !container ) {

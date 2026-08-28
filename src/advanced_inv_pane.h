@@ -4,6 +4,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,32 @@ class advanced_inventory_pane
         }
         bool in_vehicle() const {
             return viewing_cargo;
+        }
+        /**
+         * Resolve this pane's current storage mode against an AIM area.
+         */
+        std::optional<advanced_inv_endpoint> get_endpoint( const advanced_inv_area &square ) const {
+            return square.get_endpoint( in_vehicle(), container );
+        }
+        /**
+         * Resolve this pane directly against the controller's AIM area table.
+         * Aggregate/navigation views intentionally return std::nullopt.
+         */
+        std::optional<advanced_inv_endpoint> get_endpoint(
+            const std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &squares ) const {
+            if( area >= NUM_AIM_LOCATIONS ) {
+                return std::nullopt;
+            }
+            return get_endpoint( squares[area] );
+        }
+        /**
+         * Compare two concrete pane endpoints. Aggregate views never compare equal.
+         */
+        bool same_endpoint_as( const advanced_inventory_pane &other,
+                               const std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &squares ) const {
+            const std::optional<advanced_inv_endpoint> lhs = get_endpoint( squares );
+            const std::optional<advanced_inv_endpoint> rhs = other.get_endpoint( squares );
+            return lhs.has_value() && rhs.has_value() && *lhs == *rhs;
         }
         advanced_inv_pane_save_state *save_state;
         void save_settings() const;
@@ -125,11 +152,19 @@ class advanced_inventory_pane
          */
         advanced_inv_listitem *get_cur_item_ptr();
         /**
+         * @return raw item count for this pane's concrete storage mode.
+         */
+        int get_item_count( const advanced_inv_area &square ) const;
+        /**
          * @return free volume capacity of the pane's container or area
          */
         units::volume free_volume( const advanced_inv_area &square ) const;
         /**
-         * @return free weight capacity of the pane's container or area
+         * Endpoint-aware overload used by new destination logic.
+         */
+        units::mass free_weight_capacity( const advanced_inv_area &square ) const;
+        /**
+         * Legacy overload kept until all controller call sites pass the concrete area.
          */
         units::mass free_weight_capacity() const;
         /**

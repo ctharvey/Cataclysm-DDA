@@ -1,9 +1,6 @@
 #include "advanced_inv_area.h"
 
-#include <memory>
 #include <optional>
-#include <set>
-#include <unordered_map>
 #include <utility>
 
 #include "avatar.h"
@@ -22,7 +19,6 @@
 #include "pimpl.h"
 #include "translations.h"
 #include "trap.h"
-#include "type_id.h"
 #include "uistate.h"
 #include "units.h"
 #include "veh_type.h"
@@ -175,6 +171,49 @@ void advanced_inv_area::init()
     }
 }
 
+std::optional<advanced_inv_endpoint> advanced_inv_area::get_endpoint(
+    bool in_vehicle, const item_location &container ) const
+{
+    switch( id ) {
+        case AIM_INVENTORY:
+            return advanced_inv_endpoint::inventory();
+        case AIM_WORN:
+            return advanced_inv_endpoint::worn();
+        case AIM_CONTAINER:
+            if( container ) {
+                return advanced_inv_endpoint::item_container( container );
+            }
+            return std::nullopt;
+        case AIM_DRAGGED:
+            if( in_vehicle && can_store_in_vehicle() ) {
+                return advanced_inv_endpoint::vehicle_cargo( veh, vstor );
+            }
+            return std::nullopt;
+        case AIM_SOUTHWEST:
+        case AIM_SOUTH:
+        case AIM_SOUTHEAST:
+        case AIM_WEST:
+        case AIM_CENTER:
+        case AIM_EAST:
+        case AIM_NORTHWEST:
+        case AIM_NORTH:
+        case AIM_NORTHEAST:
+            if( in_vehicle ) {
+                if( can_store_in_vehicle() ) {
+                    return advanced_inv_endpoint::vehicle_cargo( veh, vstor );
+                }
+                return std::nullopt;
+            }
+            return advanced_inv_endpoint::ground( pos );
+        case AIM_ALL:
+        case AIM_PARENT:
+        case NUM_AIM_LOCATIONS:
+        case AIM_WIELD:
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 bool advanced_inv_area::is_same( const advanced_inv_area &other ) const
 {
     // All locations (sans the below) are compared by the coordinates,
@@ -270,45 +309,3 @@ vehicle_stack advanced_inv_area::get_vehicle_stack() const
     }
     return veh->get_items( veh->part( vstor ) );
 }
-
-template <typename T>
-advanced_inv_area::itemstack advanced_inv_area::i_stacked( T items )
-{
-    //create a new container for our stacked items
-    advanced_inv_area::itemstack stacks;
-    // used to recall indices we stored `itype_id' item at in itemstack
-    std::unordered_map<itype_id, std::set<int>> cache;
-    // iterate through and create stacks
-    for( item &elem : items ) {
-        const itype_id id = elem.typeId();
-        auto iter = cache.find( id );
-        bool got_stacked = false;
-        // cache entry exists
-        if( iter != cache.end() ) {
-            // check to see if it stacks with each item in a stack, not just front()
-            for( const int &idx : iter->second ) {
-                for( item *&it : stacks[idx] ) {
-                    if( ( got_stacked = it->display_stacked_with( elem ) ) ) {
-                        stacks[idx].push_back( &elem );
-                        break;
-                    }
-                }
-                if( got_stacked ) {
-                    break;
-                }
-            }
-        }
-        if( !got_stacked ) {
-            cache[id].insert( stacks.size() );
-            stacks.push_back( { &elem } );
-        }
-    }
-    return stacks;
-}
-
-// instantiate the template
-template
-advanced_inv_area::itemstack advanced_inv_area::i_stacked<vehicle_stack>( vehicle_stack items );
-
-template
-advanced_inv_area::itemstack advanced_inv_area::i_stacked<map_stack>( map_stack items );
