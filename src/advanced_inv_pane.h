@@ -152,11 +152,19 @@ class advanced_inventory_pane
          */
         advanced_inv_listitem *get_cur_item_ptr();
         /**
+         * @return raw item count for this pane's concrete storage mode.
+         */
+        int get_item_count( const advanced_inv_area &square ) const;
+        /**
          * @return free volume capacity of the pane's container or area
          */
         units::volume free_volume( const advanced_inv_area &square ) const;
         /**
-         * @return free weight capacity of the pane's container or area
+         * Endpoint-aware overload used by new destination logic.
+         */
+        units::mass free_weight_capacity( const advanced_inv_area &square ) const;
+        /**
+         * Legacy overload kept until all controller call sites pass the concrete area.
          */
         units::mass free_weight_capacity() const;
         /**
