@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "advanced_inv_area.h"
@@ -291,6 +292,13 @@ advanced_inv_listitem *advanced_inventory_pane::get_cur_item_ptr()
     return &items[index];
 }
 
+int advanced_inventory_pane::get_item_count( const advanced_inv_area &square ) const
+{
+    const std::optional<advanced_inv_storage_state> storage =
+        inspect_advanced_inv_storage( square, in_vehicle(), container );
+    return storage.has_value() ? storage->item_count : 0;
+}
+
 units::volume advanced_inventory_pane::free_volume( const advanced_inv_area &square ) const
 {
     cata_assert( area != AIM_ALL );
@@ -299,10 +307,18 @@ units::volume advanced_inventory_pane::free_volume( const advanced_inv_area &squ
     return storage.has_value() ? storage->free_volume : 0_ml;
 }
 
+units::mass advanced_inventory_pane::free_weight_capacity( const advanced_inv_area &square ) const
+{
+    cata_assert( area != AIM_ALL );
+    const std::optional<advanced_inv_storage_state> storage =
+        inspect_advanced_inv_storage( square, in_vehicle(), container );
+    return storage.has_value() ? storage->free_weight : 0_gram;
+}
+
 units::mass advanced_inventory_pane::free_weight_capacity() const
 {
-    // This method lacks the area descriptor needed by inspect_advanced_inv_storage().
-    // Keep the legacy behavior until the controller passes a concrete destination here.
+    // Legacy overload: this method lacks the area descriptor needed by the endpoint-aware
+    // storage inspector. Keep it until all controller call sites pass the concrete area.
     cata_assert( area != AIM_ALL );
     if( area == AIM_CONTAINER ) {
         if( !container ) {
