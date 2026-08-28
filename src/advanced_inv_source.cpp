@@ -1,6 +1,7 @@
 #include "advanced_inv_source.h"
 
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include "advanced_inv_area.h"
@@ -9,6 +10,7 @@
 #include "map.h"
 #include "map_selector.h"
 #include "pocket_type.h"
+#include "vehicle.h"
 #include "vehicle_selector.h"
 
 advanced_inv_source_snapshot enumerate_advanced_inv_area_source(
