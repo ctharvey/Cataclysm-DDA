@@ -6,10 +6,14 @@
 #include <vector>
 
 #include "advanced_inv_listitem.h"
+#include "item_location.h"
 #include "units.h"
 
 class advanced_inv_area;
+class avatar;
 class item;
+
+using advanced_inv_filter_predicate = std::function<bool( const item & )>;
 
 /**
  * Endpoint rows and aggregate metrics produced by one AIM source enumeration.
@@ -24,6 +28,18 @@ struct advanced_inv_source_snapshot {
     units::mass weight = 0_gram;
 };
 
+/** Enumerate the player's carried-inventory view. */
+advanced_inv_source_snapshot enumerate_advanced_inv_inventory_source(
+    avatar &you, const advanced_inv_filter_predicate &is_filtered );
+
+/** Enumerate the worn/equipment view, including the wielded row. */
+advanced_inv_source_snapshot enumerate_advanced_inv_worn_source(
+    avatar &you, const advanced_inv_filter_predicate &is_filtered );
+
+/** Enumerate the direct contents of the selected container. */
+advanced_inv_source_snapshot enumerate_advanced_inv_container_source(
+    const item_location &container, const advanced_inv_filter_predicate &is_filtered );
+
 /**
  * Enumerate one ground or vehicle-cargo endpoint represented by an AIM area.
  *
@@ -33,6 +49,6 @@ struct advanced_inv_source_snapshot {
  */
 advanced_inv_source_snapshot enumerate_advanced_inv_area_source(
     advanced_inv_area &square, bool in_vehicle,
-    const std::function<bool( const item & )> &is_filtered );
+    const advanced_inv_filter_predicate &is_filtered );
 
 #endif // CATA_SRC_ADVANCED_INV_SOURCE_H
