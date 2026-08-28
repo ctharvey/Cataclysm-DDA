@@ -175,6 +175,49 @@ void advanced_inv_area::init()
     }
 }
 
+std::optional<advanced_inv_endpoint> advanced_inv_area::get_endpoint(
+    bool in_vehicle, const item_location &container ) const
+{
+    switch( id ) {
+        case AIM_INVENTORY:
+            return advanced_inv_endpoint::inventory();
+        case AIM_WORN:
+            return advanced_inv_endpoint::worn();
+        case AIM_CONTAINER:
+            if( container ) {
+                return advanced_inv_endpoint::item_container( container );
+            }
+            return std::nullopt;
+        case AIM_DRAGGED:
+            if( in_vehicle && can_store_in_vehicle() ) {
+                return advanced_inv_endpoint::vehicle_cargo( veh, vstor );
+            }
+            return std::nullopt;
+        case AIM_SOUTHWEST:
+        case AIM_SOUTH:
+        case AIM_SOUTHEAST:
+        case AIM_WEST:
+        case AIM_CENTER:
+        case AIM_EAST:
+        case AIM_NORTHWEST:
+        case AIM_NORTH:
+        case AIM_NORTHEAST:
+            if( in_vehicle ) {
+                if( can_store_in_vehicle() ) {
+                    return advanced_inv_endpoint::vehicle_cargo( veh, vstor );
+                }
+                return std::nullopt;
+            }
+            return advanced_inv_endpoint::ground( pos );
+        case AIM_ALL:
+        case AIM_PARENT:
+        case NUM_AIM_LOCATIONS:
+        case AIM_WIELD:
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 bool advanced_inv_area::is_same( const advanced_inv_area &other ) const
 {
     // All locations (sans the below) are compared by the coordinates,
