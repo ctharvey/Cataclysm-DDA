@@ -118,6 +118,9 @@ TEST_CASE( "AIM_ground_and_vehicle_cargo_are_distinct_sources", "[items][advance
         REQUIRE( pane.items.size() == 1 );
         CHECK( pane.items.front().id == itype_knife_combat );
         CHECK_FALSE( pane.items.front().from_vehicle );
+        REQUIRE( pane.items.front().endpoint.has_value() );
+        REQUIRE( center.get_endpoint( false ).has_value() );
+        CHECK( *pane.items.front().endpoint == *center.get_endpoint( false ) );
     }
 
     SECTION( "vehicle view exposes only cargo items" ) {
@@ -127,6 +130,9 @@ TEST_CASE( "AIM_ground_and_vehicle_cargo_are_distinct_sources", "[items][advance
         REQUIRE( pane.items.size() == 1 );
         CHECK( pane.items.front().id == itype_backpack );
         CHECK( pane.items.front().from_vehicle );
+        REQUIRE( pane.items.front().endpoint.has_value() );
+        REQUIRE( center.get_endpoint( true ).has_value() );
+        CHECK( *pane.items.front().endpoint == *center.get_endpoint( true ) );
     }
 }
 
@@ -159,6 +165,9 @@ TEST_CASE( "AIM_all_excludes_only_the_matching_ground_endpoint", "[items][advanc
     CHECK( spane.items.front().id == itype_backpack );
     CHECK( spane.items.front().area == AIM_EAST );
     CHECK( spane.items.front().from_vehicle );
+    REQUIRE( spane.items.front().endpoint.has_value() );
+    REQUIRE( east_area.get_endpoint( true ).has_value() );
+    CHECK( *spane.items.front().endpoint == *east_area.get_endpoint( true ) );
 }
 
 TEST_CASE( "AIM_all_excludes_only_the_matching_vehicle_endpoint", "[items][advanced_inv]" )
@@ -190,4 +199,7 @@ TEST_CASE( "AIM_all_excludes_only_the_matching_vehicle_endpoint", "[items][advan
     CHECK( spane.items.front().id == itype_knife_combat );
     CHECK( spane.items.front().area == AIM_EAST );
     CHECK_FALSE( spane.items.front().from_vehicle );
+    REQUIRE( spane.items.front().endpoint.has_value() );
+    REQUIRE( east_area.get_endpoint( false ).has_value() );
+    CHECK( *spane.items.front().endpoint == *east_area.get_endpoint( false ) );
 }
