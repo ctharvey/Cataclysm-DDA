@@ -60,10 +60,15 @@ std::optional<advanced_inv_endpoint> endpoint_for_item( const item_location &loc
     }
     return std::nullopt;
 }
+
+bool endpoint_is_vehicle_cargo( const std::optional<advanced_inv_endpoint> &endpoint )
+{
+    return endpoint.has_value() && endpoint->kind() == advanced_inv_endpoint_kind::vehicle_cargo;
+}
 } // namespace
 
 advanced_inv_listitem::advanced_inv_listitem( const item_location &an_item, int index, int count,
-        aim_location area, bool from_vehicle )
+        aim_location area, bool expected_from_vehicle )
     : idx( index )
     , area( area )
     , id( an_item->typeId() )
@@ -75,15 +80,16 @@ advanced_inv_listitem::advanced_inv_listitem( const item_location &an_item, int 
     , volume( an_item->volume() * stacks )
     , weight( an_item->weight() * stacks )
     , cat( &an_item->get_category_of_contents() )
-    , from_vehicle( from_vehicle )
     , endpoint( endpoint_for_item( an_item, area ) )
 {
     items.push_back( an_item );
+    from_vehicle = endpoint_is_vehicle_cargo( endpoint );
+    cata_assert( from_vehicle == expected_from_vehicle );
     cata_assert( stacks >= 1 );
 }
 
 advanced_inv_listitem::advanced_inv_listitem( const std::vector<item_location> &list, int index,
-        aim_location area, bool from_vehicle ) :
+        aim_location area, bool expected_from_vehicle ) :
     idx( index ),
     area( area ),
     id( list.front()->typeId() ),
@@ -96,8 +102,9 @@ advanced_inv_listitem::advanced_inv_listitem( const std::vector<item_location> &
     volume( list.front()->volume() * stacks ),
     weight( list.front()->weight() * stacks ),
     cat( &list.front()->get_category_of_contents() ),
-    from_vehicle( from_vehicle ),
     endpoint( endpoint_for_item( list.front(), area ) )
 {
+    from_vehicle = endpoint_is_vehicle_cargo( endpoint );
+    cata_assert( from_vehicle == expected_from_vehicle );
     cata_assert( stacks >= 1 );
 }
