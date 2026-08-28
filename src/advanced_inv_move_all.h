@@ -4,7 +4,9 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
+#include "advanced_inv_listitem.h"
 #include "item_location.h"
 
 class Character;
@@ -29,6 +31,19 @@ enum class advanced_inv_move_all_priority : std::uint8_t {
 };
 
 using advanced_inv_move_all_sort_key = std::pair<int, int>;
+
+struct advanced_inv_move_all_candidate {
+    item_location location;
+    int count = 0;
+    advanced_inv_move_all_sort_key sort_key { 0, 0 };
+};
+
+struct advanced_inv_move_all_selection {
+    std::vector<advanced_inv_move_all_candidate> normal;
+    std::vector<advanced_inv_move_all_candidate> favorites;
+    item_location deferred_bucket;
+    bool deferred_wielded = false;
+};
 
 /**
  * Classify one item according to current move-all row policy.
@@ -57,5 +72,17 @@ bool advanced_inv_move_all_key_before(
     const advanced_inv_move_all_sort_key &lhs,
     const advanced_inv_move_all_sort_key &rhs,
     bool destination_is_inventory );
+
+/**
+ * Build the non-interactive portion of move-all's candidate lists.
+ *
+ * The result deliberately keeps bucket/unwield handling deferred so the caller can preserve
+ * the current prompts without source-policy and sort logic living in the controller.
+ */
+advanced_inv_move_all_selection select_advanced_inv_move_all_items(
+    Character &player, const std::vector<advanced_inv_listitem> &rows,
+    const advanced_inv_area &destination_area,
+    const item_location &destination_container, bool forbid_buckets,
+    advanced_inv_move_all_priority priority, bool destination_is_inventory );
 
 #endif // CATA_SRC_ADVANCED_INV_MOVE_ALL_H
