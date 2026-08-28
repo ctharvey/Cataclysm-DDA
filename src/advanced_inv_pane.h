@@ -4,6 +4,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,12 @@ class advanced_inventory_pane
         }
         bool in_vehicle() const {
             return viewing_cargo;
+        }
+        /**
+         * Resolve this pane's current storage mode against an AIM area.
+         */
+        std::optional<advanced_inv_endpoint> get_endpoint( const advanced_inv_area &square ) const {
+            return square.get_endpoint( in_vehicle(), container );
         }
         advanced_inv_pane_save_state *save_state;
         void save_settings() const;

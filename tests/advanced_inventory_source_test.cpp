@@ -67,6 +67,17 @@ TEST_CASE( "AIM_endpoint_identity_is_storage_not_screen_position", "[items][adva
     CHECK( cargo->kind() == advanced_inv_endpoint_kind::vehicle_cargo );
     CHECK( *ground != *cargo );
 
+    advanced_inventory_pane &pane = advinv.get_pane( advinv.get_src() );
+    pane.set_area( center, false );
+    const std::optional<advanced_inv_endpoint> pane_ground = pane.get_endpoint( center );
+    REQUIRE( pane_ground.has_value() );
+    CHECK( *pane_ground == *ground );
+
+    pane.set_area( center, true );
+    const std::optional<advanced_inv_endpoint> pane_cargo = pane.get_endpoint( center );
+    REQUIRE( pane_cargo.has_value() );
+    CHECK( *pane_cargo == *cargo );
+
     advanced_inv_area ground_alias( AIM_EAST );
     ground_alias.pos = center.pos;
     const std::optional<advanced_inv_endpoint> aliased_ground = ground_alias.get_endpoint( false );
