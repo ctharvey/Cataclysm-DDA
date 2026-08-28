@@ -1,9 +1,6 @@
 #include "advanced_inv_area.h"
 
-#include <memory>
 #include <optional>
-#include <set>
-#include <unordered_map>
 #include <utility>
 
 #include "avatar.h"
@@ -22,7 +19,6 @@
 #include "pimpl.h"
 #include "translations.h"
 #include "trap.h"
-#include "type_id.h"
 #include "uistate.h"
 #include "units.h"
 #include "veh_type.h"
@@ -313,45 +309,3 @@ vehicle_stack advanced_inv_area::get_vehicle_stack() const
     }
     return veh->get_items( veh->part( vstor ) );
 }
-
-template <typename T>
-advanced_inv_area::itemstack advanced_inv_area::i_stacked( T items )
-{
-    //create a new container for our stacked items
-    advanced_inv_area::itemstack stacks;
-    // used to recall indices we stored `itype_id' item at in itemstack
-    std::unordered_map<itype_id, std::set<int>> cache;
-    // iterate through and create stacks
-    for( item &elem : items ) {
-        const itype_id id = elem.typeId();
-        auto iter = cache.find( id );
-        bool got_stacked = false;
-        // cache entry exists
-        if( iter != cache.end() ) {
-            // check to see if it stacks with each item in a stack, not just front()
-            for( const int &idx : iter->second ) {
-                for( item *&it : stacks[idx] ) {
-                    if( ( got_stacked = it->display_stacked_with( elem ) ) ) {
-                        stacks[idx].push_back( &elem );
-                        break;
-                    }
-                }
-                if( got_stacked ) {
-                    break;
-                }
-            }
-        }
-        if( !got_stacked ) {
-            cache[id].insert( stacks.size() );
-            stacks.push_back( { &elem } );
-        }
-    }
-    return stacks;
-}
-
-// instantiate the template
-template
-advanced_inv_area::itemstack advanced_inv_area::i_stacked<vehicle_stack>( vehicle_stack items );
-
-template
-advanced_inv_area::itemstack advanced_inv_area::i_stacked<map_stack>( map_stack items );
