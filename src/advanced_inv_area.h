@@ -3,9 +3,11 @@
 #define CATA_SRC_ADVANCED_INV_AREA_H
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "advanced_inv_endpoint.h"
 #include "coordinates.h"
 #include "item_location.h"
 #include "point.h"
@@ -96,7 +98,16 @@ class advanced_inv_area
         template <typename T>
         advanced_inv_area::itemstack i_stacked( T items );
         int get_item_count() const;
-        // Other area is actually the same item source, e.g. dragged vehicle to the south and AIM_SOUTH
+
+        /**
+         * Return the logical endpoint represented by this area in the requested storage mode.
+         * Aggregate/navigation areas do not represent endpoints and return std::nullopt.
+         */
+        std::optional<advanced_inv_endpoint> get_endpoint(
+            bool in_vehicle, const item_location &container = item_location::nowhere ) const;
+
+        // Legacy area-level comparison. This intentionally does not distinguish ground from
+        // vehicle cargo. Use get_endpoint() when storage endpoint identity matters.
         bool is_same( const advanced_inv_area &other ) const;
         // does _not_ check vehicle storage, do that with `can_store_in_vehicle()' below
         bool canputitems( const item_location &container = item_location::nowhere ) const;

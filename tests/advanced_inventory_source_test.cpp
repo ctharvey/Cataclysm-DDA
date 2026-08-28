@@ -3,6 +3,7 @@
 
 #include "advanced_inv.h"
 #include "advanced_inv_area.h"
+#include "advanced_inv_endpoint.h"
 #include "advanced_inv_listitem.h"
 #include "advanced_inv_pane.h"
 #include "avatar.h"
@@ -41,6 +42,44 @@ static void add_shopping_cart_item( map &here, const tripoint_bub_ms &pos, const
     vehicle_stack cargo_items = cargo->items();
     cargo_items.clear();
     cargo_items.insert( here, it );
+}
+
+TEST_CASE( "AIM_endpoint_identity_is_storage_not_screen_position", "[items][advanced_inv]" )
+{
+    clear_AIM_source_test_state();
+
+    avatar &u = get_avatar();
+    map &here = get_map();
+    const tripoint_bub_ms pos = u.pos_bub();
+
+    add_shopping_cart_item( here, pos, item( itype_backpack ) );
+
+    advanced_inventory advinv;
+    advinv.init();
+
+    advanced_inv_area &center = advinv.get_one_square( AIM_CENTER );
+    const std::optional<advanced_inv_endpoint> ground = center.get_endpoint( false );
+    const std::optional<advanced_inv_endpoint> cargo = center.get_endpoint( true );
+
+    REQUIRE( ground.has_value() );
+    REQUIRE( cargo.has_value() );
+    CHECK( ground->kind() == advanced_inv_endpoint_kind::ground );
+    CHECK( cargo->kind() == advanced_inv_endpoint_kind::vehicle_cargo );
+    CHECK( *ground != *cargo );
+
+    advanced_inv_area ground_alias( AIM_EAST );
+    ground_alias.pos = center.pos;
+    const std::optional<advanced_inv_endpoint> aliased_ground = ground_alias.get_endpoint( false );
+    REQUIRE( aliased_ground.has_value() );
+    CHECK( *ground == *aliased_ground );
+
+    advanced_inv_area dragged_alias( AIM_DRAGGED );
+    dragged_alias.pos = center.pos;
+    dragged_alias.veh = center.veh;
+    dragged_alias.vstor = center.vstor;
+    const std::optional<advanced_inv_endpoint> aliased_cargo = dragged_alias.get_endpoint( true );
+    REQUIRE( aliased_cargo.has_value() );
+    CHECK( *cargo == *aliased_cargo );
 }
 
 TEST_CASE( "AIM_ground_and_vehicle_cargo_are_distinct_sources", "[items][advanced_inv]" )
