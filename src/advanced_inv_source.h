@@ -2,14 +2,16 @@
 #ifndef CATA_SRC_ADVANCED_INV_SOURCE_H
 #define CATA_SRC_ADVANCED_INV_SOURCE_H
 
+#include <array>
 #include <functional>
+#include <optional>
 #include <vector>
 
+#include "advanced_inv_area.h"
 #include "advanced_inv_listitem.h"
 #include "item_location.h"
 #include "units.h"
 
-class advanced_inv_area;
 class avatar;
 class item;
 
@@ -49,6 +51,17 @@ advanced_inv_source_snapshot enumerate_advanced_inv_container_source(
  */
 advanced_inv_source_snapshot enumerate_advanced_inv_area_source(
     advanced_inv_area &square, bool in_vehicle,
+    const advanced_inv_filter_predicate &is_filtered );
+
+/**
+ * Enumerate every concrete ground/cargo endpoint in the 3x3 AIM neighborhood,
+ * optionally excluding exactly one destination endpoint.
+ *
+ * This is the source-domain form of AIM_ALL. The aggregate itself is not an endpoint.
+ */
+advanced_inv_source_snapshot enumerate_advanced_inv_around_sources(
+    std::array<advanced_inv_area, NUM_AIM_LOCATIONS> &areas,
+    const std::optional<advanced_inv_endpoint> &excluded_endpoint,
     const advanced_inv_filter_predicate &is_filtered );
 
 #endif // CATA_SRC_ADVANCED_INV_SOURCE_H
