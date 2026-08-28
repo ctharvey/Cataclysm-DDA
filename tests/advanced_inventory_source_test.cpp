@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <optional>
 
 #include "advanced_inv.h"
 #include "advanced_inv_area.h"
@@ -13,6 +14,7 @@
 #include "map_helpers.h"
 #include "point.h"
 #include "type_id.h"
+#include "units.h"
 #include "vehicle.h"
 #include "vpart_position.h"
 
