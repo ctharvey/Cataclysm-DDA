@@ -96,8 +96,10 @@ class vpart_position
         std::optional<vpart_reference> part_with_tool( map &here, const itype_id &tool_type ) const;
         // Returns a list of all tools provided by vehicle and their hotkey
         std::map<item, int> get_tools( map &here ) const;
-        // Forms inventory for inventory::form_from_map
-        void form_inventory( map &here, inventory &inv ) const;
+        // Forms inventory for inventory::form_from_map.  When bulk_items is supplied,
+        // cargo items are appended there for the caller to add in one batch.
+        void form_inventory( map &here, inventory &inv,
+                             std::vector<item> *bulk_items = nullptr ) const;
 
         bool can_load_furniture() const;
         bool has_loaded_furniture() const;

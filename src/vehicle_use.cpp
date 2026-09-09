@@ -1900,7 +1900,8 @@ void vehicle::build_bike_rack_menu( map &here, veh_menu &menu, int part )
     }
 }
 
-void vpart_position::form_inventory( map &here, inventory &inv ) const
+void vpart_position::form_inventory( map &here, inventory &inv,
+                                     std::vector<item> *bulk_items ) const
 {
     if( const std::optional<vpart_reference> vp_cargo = part_with_feature( VPFLAG_CARGO, true ) ) {
         for( const item &it : vp_cargo->items() ) {
@@ -1908,7 +1909,11 @@ void vpart_position::form_inventory( map &here, inventory &inv ) const
                 const int count = it.count_by_charges() ? it.charges : 1;
                 inv.update_liq_container_count( it.typeId(), count );
             }
-            inv.add_item( it );
+            if( bulk_items ) {
+                bulk_items->emplace_back( it );
+            } else {
+                inv.add_item( it );
+            }
         }
     }
 
@@ -1918,7 +1923,11 @@ void vpart_position::form_inventory( map &here, inventory &inv ) const
         for( const item *it : vehicle().fuel_items_left() ) {
             if( it->made_of( phase_id::LIQUID ) ) {
                 item fuel( *it );
-                inv.add_item( fuel );
+                if( bulk_items ) {
+                    bulk_items->emplace_back( std::move( fuel ) );
+                } else {
+                    inv.add_item( std::move( fuel ) );
+                }
             }
         }
     }
