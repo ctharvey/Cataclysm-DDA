@@ -21,6 +21,7 @@
 #include "character.h"
 #include "character_id.h"
 #include "crafting_gui.h"
+#include "crafting_requirement_index.h"
 #include "debug.h"
 #include "display.h"
 #include "enums.h"
@@ -69,6 +70,129 @@ void delete_if( std::map<recipe_id, recipe> &data,
             ++it;
         }
     }
+}
+
+// Translates one deduped requirement alternative into index groups: each
+// components/tools/qualities entry is an AND group, its entries are OR
+// options. Group order follows components, tools, then qualities with entry
+// order preserved, so it is deterministic. Returns false with a reason when
+// the alternative cannot be represented exactly.
+bool translate_requirement_alternative( const requirement_data &alt,
+                                        crafting_requirement_alternative &groups,
+                                        std::string &reason )
+{
+    const auto fail = [&]( const std::string & msg ) {
+        reason = msg;
+        return false;
+    };
+
+    for( const std::vector<item_comp> &comp_group : alt.get_components() ) {
+        crafting_requirement_group grp;
+        grp.kind = requirement_group_kind::component;
+        for( const item_comp &ic : comp_group ) {
+            if( ic.type.is_null() || !item::type_is_defined( ic.type ) ) {
+                return fail( "component with undefined item type" );
+            }
+            if( ic.count == 0 || ic.count == INT_MIN ) {
+                return fail( "component with nonpositive or unrepresentable count" );
+            }
+            crafting_requirement_option opt;
+            opt.kind = item::count_by_charges( ic.type )
+                       ? crafting_requirement_fact_kind::component_charges
+                       : crafting_requirement_fact_kind::component_units;
+            opt.id = ic.type.str();
+            opt.threshold = ic.count < 0 ? -ic.count : ic.count;
+            grp.options.push_back( opt );
+        }
+        if( grp.options.empty() ) {
+            return fail( "component group with no options" );
+        }
+        groups.push_back( grp );
+    }
+
+    for( const std::vector<tool_comp> &tool_group : alt.get_tools() ) {
+        crafting_requirement_group grp;
+        grp.kind = requirement_group_kind::tool;
+        for( const tool_comp &tc : tool_group ) {
+            if( tc.type.is_null() || !item::type_is_defined( tc.type ) ) {
+                return fail( "tool with undefined item type" );
+            }
+            crafting_requirement_option opt;
+            opt.id = tc.type.str();
+            if( tc.by_charges() ) {
+                const itype *tool_type = item::find_type( tc.type );
+                const long long threshold =
+                    static_cast<long long>( tc.count ) * tool_type->charge_factor();
+                if( threshold <= 0 || threshold > INT_MAX ) {
+                    return fail( "tool charge requirement overflows or is nonpositive" );
+                }
+                opt.kind = crafting_requirement_fact_kind::tool_charges;
+                opt.threshold = static_cast<int>( threshold );
+            } else {
+                if( tc.count == 0 || tc.count == INT_MIN ) {
+                    return fail( "tool with nonpositive or unrepresentable count" );
+                }
+                opt.kind = crafting_requirement_fact_kind::tool_instances;
+                opt.threshold = tc.count < 0 ? -tc.count : tc.count;
+            }
+            grp.options.push_back( opt );
+        }
+        if( grp.options.empty() ) {
+            return fail( "tool group with no options" );
+        }
+        groups.push_back( grp );
+    }
+
+    for( const std::vector<quality_requirement> &qual_group : alt.get_qualities() ) {
+        crafting_requirement_group grp;
+        grp.kind = requirement_group_kind::quality;
+        for( const quality_requirement &q : qual_group ) {
+            if( !q.type.is_valid() ) {
+                return fail( "quality requirement with undefined quality" );
+            }
+            if( q.count <= 0 || q.level <= 0 ) {
+                return fail( "quality requirement with nonpositive count or level" );
+            }
+            crafting_requirement_option opt;
+            opt.kind = crafting_requirement_fact_kind::quality_providers;
+            opt.id = q.type.str();
+            opt.level = q.level;
+            opt.threshold = q.count;
+            grp.options.push_back( opt );
+        }
+        if( grp.options.empty() ) {
+            return fail( "quality group with no options" );
+        }
+        groups.push_back( grp );
+    }
+
+    return true;
+}
+
+// Effective filter profile bitmasks per menu mode, derived exactly from the
+// public properties recipe::get_component_filter consults.
+std::array<int, menu_filter_mode_count> effective_profiles_for( const recipe &r )
+{
+    const item result( r.result() );
+
+    int base = recipe_filter_none;
+    // Disallow crafting of non-perishables with rotten components, with an
+    // exception for items with the ALLOW_ROTTEN flag such as seeds.
+    if( result.is_food() && !result.goes_bad() && !r.has_flag( "ALLOW_ROTTEN" ) ) {
+        base |= recipe_filter_rotten_forbidden;
+    }
+    // Frozen components are forbidden unless the result is made hot.
+    if( result.has_temperature() && !r.hot_result() ) {
+        base |= recipe_filter_frozen_forbidden;
+    }
+    // Non-full magazines are forbidden as components.
+    if( r.has_flag( "NEED_FULL_MAGAZINE" ) ) {
+        base |= recipe_filter_full_magazine_required;
+    }
+
+    return { { base,
+               base | recipe_filter_rotten_forbidden,
+               base | recipe_filter_favorite_forbidden } };
 }
 
 } // namespace
@@ -716,6 +840,56 @@ void recipe_dictionary::finalize_internal( std::map<recipe_id, recipe> &obj )
     } );
 }
 
+void recipe_dictionary::build_requirements_index()
+{
+    crafting_requirement_index &index = recipe_dict.requirements_index_;
+    index.clear();
+
+    for( const auto &e : recipe_dict.recipes ) {
+        const recipe &r = e.second;
+        const recipe_id &id = e.first;
+
+        std::string reason;
+        if( r.obsolete ) {
+            reason = "obsolete recipe";
+        } else if( r.is_nested() ) {
+            reason = "nested category recipe";
+        } else if( r.is_blueprint() ) {
+            reason = "blueprint recipe";
+        } else if( r.deduped_requirements().is_too_complex() ) {
+            reason = "deduplicated requirements are too complex to represent";
+        }
+
+        if( !reason.empty() ) {
+            index.add_unsupported_recipe( id, reason );
+            continue;
+        }
+
+        crafting_requirement_plan plan;
+        bool ok = true;
+        for( const requirement_data &alt : r.deduped_requirements().alternatives() ) {
+            crafting_requirement_alternative groups;
+            if( !translate_requirement_alternative( alt, groups, reason ) ) {
+                ok = false;
+                break;
+            }
+            plan.alternatives.push_back( std::move( groups ) );
+        }
+
+        if( ok && index.add_recipe( id, plan, effective_profiles_for( r ), &reason ) ) {
+            continue;
+        }
+        if( reason.empty() ) {
+            reason = "requirements cannot be represented exactly";
+        }
+        // add_recipe validated first and left the index unmodified on
+        // failure, so recording the recipe as unsupported here is exact.
+        index.add_unsupported_recipe( id, reason );
+    }
+
+    index.finalize();
+}
+
 void recipe_dictionary::find_items_on_loops()
 {
     // Check for infinite recipe loops in food (which are problematic for
@@ -855,6 +1029,11 @@ void recipe_dictionary::finalize()
     }
 
     recipe_dict.find_items_on_loops();
+
+    // Built strictly last: every recipe is finalized, the uncraft map and all
+    // pointer caches (autolearn, nested, blueprints, obsoletes) exist, and no
+    // further recipes will be added or removed.
+    build_requirements_index();
 }
 
 void recipe_dictionary::check_consistency()
@@ -899,6 +1078,9 @@ void recipe_dictionary::check_consistency()
 
 void recipe_dictionary::reset()
 {
+    // The index references recipes by id only, but it must never outlive or
+    // outdate the recipe maps it was built from.
+    recipe_dict.requirements_index_.clear();
     recipe_dict.blueprints.clear();
     recipe_dict.autolearn.clear();
     recipe_dict.nested.clear();

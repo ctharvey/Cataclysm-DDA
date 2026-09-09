@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "crafting_requirement_index.h"
 #include "input_context.h"
 #include "recipe.h"
 #include "type_id.h"
@@ -49,6 +50,13 @@ class recipe_dictionary
         std::map<recipe_id, recipe>::const_iterator begin() const;
         std::map<recipe_id, recipe>::const_iterator end() const;
 
+        /** The finalized capped requirement index, with one explicit record
+         *  (supported or unsupported) per entry in @ref recipes. Only valid
+         *  after finalize(). */
+        const crafting_requirement_index &requirement_index() const {
+            return requirements_index_;
+        }
+
         bool is_item_on_loop( const itype_id & ) const;
 
         /** Returns disassembly recipe (or null recipe if no match) */
@@ -83,8 +91,12 @@ class recipe_dictionary
         std::set<const recipe *> blueprints;
         std::map<const itype_id, const recipe *> obsoletes;
         std::unordered_set<itype_id> items_on_loops;
+        // Immutable after finalize(); owned here so its lifetime never
+        // outlives the recipe maps it was built from.
+        crafting_requirement_index requirements_index_;
 
         static void finalize_internal( std::map<recipe_id, recipe> &obj );
+        static void build_requirements_index();
         void find_items_on_loops();
 };
 
