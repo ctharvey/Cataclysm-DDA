@@ -354,9 +354,8 @@ TEST_CASE( "crafting_requirement_index_reverse_edge_coordinates", "[crafting]" )
     CHECK( index.add_recipe( recipe, plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
-    // Item/tool options derive one edge per menu mode onto the shared
-    // profile-0 key; all three edges carry identical coordinates apart from
-    // the menu mode.
+    // Component options derive one edge per menu mode onto the shared
+    // profile-0 key when all effective profiles are unfiltered.
     const std::vector<crafting_requirement_edge> steel_edges =
         index.edges_for( make_key( "steel" ) );
     REQUIRE( steel_edges.size() == 3 );
@@ -385,7 +384,7 @@ TEST_CASE( "crafting_requirement_index_reverse_edge_coordinates", "[crafting]" )
 
     const std::vector<crafting_requirement_edge> hammer_edges =
         index.edges_for( make_key( "hammer", fact_kind::tool_charges ) );
-    REQUIRE( hammer_edges.size() == 3 );
+    REQUIRE( hammer_edges.size() == 1 );
     for( const crafting_requirement_edge &edge : hammer_edges ) {
         CHECK( edge.id == recipe );
         CHECK( edge.group_kind == group_kind::tool );
@@ -912,13 +911,14 @@ TEST_CASE( "requirement_index_loaded_dictionary_one_explicit_record_per_recipe",
                 for( std::size_t o = 0; o < grp.options.size(); ++o ) {
                     const crafting_requirement_option &opt = grp.options[o];
                     REQUIRE( opt.threshold > 0 );
-                    const bool is_quality = opt.kind == fact_kind::quality_providers;
-                    const int modes = is_quality ? 1 : menu_filter_mode_count;
+                    const bool component = opt.kind == fact_kind::component_units ||
+                                           opt.kind == fact_kind::component_charges;
+                    const int modes = component ? menu_filter_mode_count : 1;
                     for( int m = 0; m < modes; ++m ) {
-                        const int profile = is_quality
-                                            ? recipe_filter_none
-                                            : index.effective_profile_for( id,
-                                                    static_cast<menu_mode>( m ) );
+                        const int profile = component
+                                            ? index.effective_profile_for( id,
+                                                    static_cast<menu_mode>( m ) )
+                                            : recipe_filter_none;
                         // Effective profile bits must be a valid combination.
                         REQUIRE( ( profile & ~recipe_filter_valid_bits ) == 0 );
                         crafting_requirement_fact_key key;
@@ -938,7 +938,7 @@ TEST_CASE( "requirement_index_loaded_dictionary_one_explicit_record_per_recipe",
                                 edge.group == static_cast<int>( g ) &&
                                 edge.option == static_cast<int>( o ) &&
                                 edge.threshold == opt.threshold &&
-                                ( is_quality ||
+                                ( !component ||
                                   edge.menu == static_cast<menu_mode>( m ) ) ) {
                                 found = true;
                                 break;
@@ -1747,4 +1747,193 @@ TEST_CASE( "phase3a_evaluate_mode_specific_effective_filter_profiles", "[craftin
                       profiles ) == crafting_requirement_result::satisfied );
     CHECK( eval_plan( "p3a_mode_profiles", plan, inv, menu_mode::no_favorite,
                       profiles ) == crafting_requirement_result::unsatisfied );
+}
+
+TEST_CASE( "phase3b_tool_facts_ignore_component_filters", "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    const crafting_requirement_plan plan = one_group_plan( group_kind::tool,
+    { make_option( "stick", 1, fact_kind::tool_instances ) } );
+    const profiles_array profiles = make_profiles(
+                                        recipe_filter_none,
+                                        recipe_filter_rotten_forbidden,
+                                        recipe_filter_favorite_forbidden );
+    REQUIRE( index.add_recipe( rid( "p3b_favorite_tool" ), plan, profiles ) );
+    index.finalize();
+
+    item favorite_tool( itype_id( "stick" ) );
+    favorite_tool.is_favorite = true;
+    inventory inv;
+    inv.add_item( favorite_tool );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_evaluator eval( index, snap );
+    CHECK( index.fact_count() == 1 );
+    CHECK( index.maximum_for( make_key( "stick", fact_kind::tool_instances ) ) == 1 );
+    CHECK( index.maximum_for( make_key( "stick", fact_kind::tool_instances, 0,
+                                       recipe_filter_favorite_forbidden ) ) == 0 );
+    CHECK( eval.evaluate( rid( "p3b_favorite_tool" ), menu_mode::normal ) ==
+           crafting_requirement_result::satisfied );
+    CHECK( eval.evaluate( rid( "p3b_favorite_tool" ), menu_mode::no_favorite ) ==
+           crafting_requirement_result::satisfied );
+}
+
+TEST_CASE( "phase3b_filthy_items_are_not_exact_components", "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 1 ) } );
+    REQUIRE( index.add_recipe( rid( "p3b_filthy_component" ), plan,
+                               uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    item filthy_stick( itype_id( "stick" ) );
+    filthy_stick.set_flag( flag_id( "FILTHY" ) );
+    inventory inv;
+    inv.add_item( filthy_stick );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_evaluator eval( index, snap );
+    CHECK( snap.count_for( make_key( "stick" ) ) == 0 );
+    CHECK( eval.evaluate( rid( "p3b_filthy_component" ), menu_mode::normal ) ==
+           crafting_requirement_result::unsatisfied );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3B: loaded-recipe equivalence matrix -- shadow evaluation over the
+// loaded dictionary must agree with the legacy requirement check whenever
+// the shadow result is exact.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+struct phase3b_inventory_case
+{
+    const char *label;
+    inventory inv;
+};
+
+phase3b_inventory_case make_phase3b_inventory_case( const char *label, int sticks,
+        bool favorite = false, bool frozen = false )
+{
+    phase3b_inventory_case c;
+    c.label = label;
+    for( int i = 0; i < sticks; ++i ) {
+        item stick( itype_id( "stick" ) );
+        if( favorite ) {
+            stick.is_favorite = true;
+        }
+        if( frozen ) {
+            stick.set_flag( flag_FROZEN );
+        }
+        c.inv.add_item( stick );
+    }
+    return c;
+}
+
+} // namespace
+
+TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    REQUIRE( index.is_finalized() );
+
+    // Six deterministic inventories, snapshotted once each (not per recipe).
+    const phase3b_inventory_case cases[] = {
+        make_phase3b_inventory_case( "empty", 0 ),
+        make_phase3b_inventory_case( "one_stick", 1 ),
+        make_phase3b_inventory_case( "twenty_sticks", 20 ),
+        make_phase3b_inventory_case( "twenty_favorite_sticks", 20, true ),
+        make_phase3b_inventory_case( "twenty_frozen_sticks", 20, false, true ),
+        []() {
+            phase3b_inventory_case c;
+            c.label = "soldering_iron_100_local_charges";
+            item tool( itype_id( "soldering_iron" ) );
+            tool.charges = 100;
+            c.inv.add_item( tool );
+            return c;
+        }()
+    };
+
+    std::vector<crafting_inventory_snapshot> snapshots;
+    snapshots.reserve( std::size( cases ) );
+    for( const phase3b_inventory_case &c : cases ) {
+        snapshots.emplace_back( index, c.inv );
+    }
+
+    const std::array<menu_mode, menu_filter_mode_count> menus = { {
+            menu_mode::normal, menu_mode::no_rotten, menu_mode::no_favorite
+        }
+    };
+    const std::array<recipe_filter_flags, menu_filter_mode_count> menu_flags = { {
+            recipe_filter_flags::none,
+            recipe_filter_flags::no_rotten,
+            recipe_filter_flags::no_favorite
+        }
+    };
+    const std::array<const char *, menu_filter_mode_count> menu_names = { {
+            "normal", "no_rotten", "no_favorite"
+        }
+    };
+
+    // Cumulative exact-satisfied / exact-unsatisfied / unknown counts.
+    std::array<std::size_t, menu_filter_mode_count> exact_sat = {};
+    std::array<std::size_t, menu_filter_mode_count> exact_unsat = {};
+    std::size_t unknown_count = 0;
+    std::size_t exact_comparisons = 0;
+
+    for( const auto &e : recipe_dict ) {
+        const recipe_id &id = e.first;
+        const recipe &r = e.second;
+        const crafting_recipe_support *support = index.support_for( id );
+        REQUIRE( support != nullptr );
+        if( support->state != recipe_support_state::supported ) {
+            continue;
+        }
+        REQUIRE( index.plan_for( id ) != nullptr );
+
+        for( std::size_t ci = 0; ci < std::size( cases ); ++ci ) {
+            const crafting_requirement_evaluator eval( index, snapshots[ci] );
+            for( std::size_t m = 0; m < menu_filter_mode_count; ++m ) {
+                const crafting_requirement_result result =
+                    eval.evaluate( id, menus[m] );
+                if( result == crafting_requirement_result::unknown ) {
+                    // Unknown results are counted but never compared: the
+                    // legacy path is the mandatory fallback there.
+                    ++unknown_count;
+                    continue;
+                }
+                const bool shadow_can_make =
+                    result == crafting_requirement_result::satisfied;
+                const bool legacy_can_make =
+                    r.deduped_requirements().can_make_with_inventory(
+                        nullptr, cases[ci].inv,
+                        r.get_component_filter( menu_flags[m] ),
+                        1, craft_flags::none );
+                INFO( "recipe: " << id.str() );
+                INFO( "menu: " << menu_names[m] );
+                INFO( "inventory: " << cases[ci].label );
+                INFO( "cumulative: satisfied=" << exact_sat[m]
+                      << " unsatisfied=" << exact_unsat[m]
+                      << " unknown=" << unknown_count );
+                CHECK( shadow_can_make == legacy_can_make );
+                ++exact_comparisons;
+                if( shadow_can_make ) {
+                    ++exact_sat[m];
+                } else {
+                    ++exact_unsat[m];
+                }
+            }
+        }
+    }
+
+    const std::size_t exact_satisfied = exact_sat[0] + exact_sat[1] + exact_sat[2];
+    const std::size_t exact_unsatisfied = exact_unsat[0] + exact_unsat[1] + exact_unsat[2];
+    CAPTURE( exact_satisfied );
+    CAPTURE( exact_unsatisfied );
+    CAPTURE( unknown_count );
+    CAPTURE( exact_comparisons );
+    // The matrix must actually compare something.
+    REQUIRE( exact_comparisons > 0 );
 }

@@ -77,6 +77,7 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
         const itype_id id = it.typeId();
         const bool pseudo = it.has_flag( flag_PSEUDO );
         const bool by_charges = it.count_by_charges();
+        const bool component_eligible = is_crafting_component( it );
 
         // Overflow-safe capped addition; once a fact reaches its index
         // maximum it is recorded as saturated and stops updating.
@@ -107,7 +108,7 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
                     case crafting_requirement_fact_kind::component_units:
                         // Components exclude pseudo items (legacy
                         // amount_of(..., pseudo = false)).
-                        if( !pseudo ) {
+                        if( !pseudo && component_eligible ) {
                             capped_add( key, 1, maximum );
                         }
                         break;
@@ -119,7 +120,7 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
                     case crafting_requirement_fact_kind::component_charges:
                         // Pseudo excluded like component units; only
                         // count-by-charges items contribute their charges.
-                        if( !pseudo && by_charges ) {
+                        if( !pseudo && component_eligible && by_charges ) {
                             capped_add( key, it.charges, maximum );
                         }
                         break;
@@ -316,13 +317,16 @@ bool kind_matches_group( requirement_group_kind group,
     return false;
 }
 
-// Number of fact keys derived from one option: quality shares a single
-// profile-0 key; everything else gets one key per menu mode.
+bool uses_component_filter( crafting_requirement_fact_kind kind )
+{
+    return kind == crafting_requirement_fact_kind::component_units ||
+           kind == crafting_requirement_fact_kind::component_charges;
+}
+
+// Components get one key per menu mode; tools and qualities use profile 0.
 int menu_modes_for_kind( crafting_requirement_fact_kind kind )
 {
-    return kind == crafting_requirement_fact_kind::quality_providers
-           ? 1
-           : menu_filter_mode_count;
+    return uses_component_filter( kind ) ? menu_filter_mode_count : 1;
 }
 
 menu_filter_mode nth_menu_mode( int n )
@@ -391,12 +395,11 @@ bool crafting_requirement_index::add_recipe(
                 }
                 const int menu_count = menu_modes_for_kind( opt.kind );
                 for( int m = 0; m < menu_count; ++m ) {
-                    // Item/tool facts carry the effective profile for their
-                    // menu mode; quality facts always use profile 0.
-                    const int profile = opt.kind ==
-                                        crafting_requirement_fact_kind::quality_providers
-                                        ? recipe_filter_none
-                                        : effective_profiles[m];
+                    // Only components use recipe filters in the legacy
+                    // solver. Tool and quality facts are always unfiltered.
+                    const int profile = uses_component_filter( opt.kind )
+                                        ? effective_profiles[m]
+                                        : recipe_filter_none;
                     const crafting_requirement_fact_key key = derive_key( opt, profile );
                     staged_thresholds[key].push_back( opt.threshold );
                     crafting_requirement_edge edge;
@@ -748,9 +751,9 @@ crafting_requirement_result crafting_requirement_evaluator::evaluate(
                     : crafting_requirement_result::unsatisfied;
                 for( const crafting_requirement_option &opt : grp.options ) {
                     crafting_requirement_fact_key key = derive_key( opt,
-                            opt.kind == crafting_requirement_fact_kind::quality_providers
-                            ? recipe_filter_none
-                            : effective_profile );
+                            uses_component_filter( opt.kind )
+                            ? effective_profile
+                            : recipe_filter_none );
                     if( key.id == "any" || !snapshot_.is_exact( key ) ) {
                         group_result = or_reduce( group_result,
                                                   crafting_requirement_result::unknown );

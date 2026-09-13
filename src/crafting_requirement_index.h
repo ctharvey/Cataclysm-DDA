@@ -22,9 +22,9 @@ enum class crafting_requirement_fact_kind : int {
     quality_providers
 };
 
-// The menu filter mode a requirement is evaluated under. Item and tool
-// options derive one fact key per mode using the recipe's effective filter
-// profile for that mode; quality options share a single unfiltered key.
+// The menu filter mode a requirement is evaluated under. Component options
+// derive one fact key per mode using the recipe's effective filter profile;
+// tool and quality options share unfiltered keys, matching the legacy solver.
 enum class menu_filter_mode : int {
     normal = 0,
     no_rotten,
