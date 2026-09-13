@@ -1474,3 +1474,277 @@ TEST_CASE( "crafting_inventory_snapshot_ups_tool_charges_is_inexact_and_unsuppor
     CHECK( snap.inexact_fact_count() == 1 );
     CHECK( snap.unsupported_fact_count() == 1 );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3A: conservative tri-state shadow evaluation.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+// Builds a one-recipe index from a plan, snapshots the inventory against it,
+// and evaluates the recipe under the given menu mode. When finalized is
+// false the index is deliberately left unfinalized to exercise the
+// conservative unknown path.
+crafting_requirement_result eval_plan( const std::string &name,
+                                       const crafting_requirement_plan &plan,
+                                       const inventory &inv,
+                                       menu_mode menu = menu_mode::normal,
+                                       const profiles_array &profiles =
+                                           uniform_profiles( recipe_filter_none ),
+                                       bool finalized = true )
+{
+    crafting_requirement_index index;
+    REQUIRE( index.add_recipe( rid( name.c_str() ), plan, profiles ) );
+    if( finalized ) {
+        index.finalize();
+    }
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_evaluator eval( index, snap );
+    return eval.evaluate( rid( name.c_str() ), menu );
+}
+
+// Single alternative with a single component group of the given options.
+crafting_requirement_plan one_group_plan( group_kind kind,
+        const std::vector<crafting_requirement_option> &opts )
+{
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( kind, opts ) } );
+    return plan;
+}
+
+} // namespace
+
+TEST_CASE( "phase3a_evaluate_exact_satisfied_and_unsatisfied", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 2 ) } );
+
+    CHECK( eval_plan( "p3a_exact", plan, make_stick_inventory( 2 ) ) ==
+           crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_exact", plan, make_stick_inventory( 5 ) ) ==
+           crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_exact", plan, make_stick_inventory( 1 ) ) ==
+           crafting_requirement_result::unsatisfied );
+    CHECK( eval_plan( "p3a_exact", plan, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::unsatisfied );
+}
+
+TEST_CASE( "phase3a_evaluate_option_or", "[crafting][requirement_index]" )
+{
+    // (steel >= 5 OR stick >= 1): the cheap option satisfies alone.
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 5 ), make_option( "soldering_iron", 1 ) } );
+
+    inventory inv;
+    inv.add_item( item( itype_id( "soldering_iron" ) ) );
+    CHECK( eval_plan( "p3a_option_or", plan, inv ) ==
+           crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_option_or", plan, make_stick_inventory( 1 ) ) ==
+           crafting_requirement_result::unsatisfied );
+}
+
+TEST_CASE( "phase3a_evaluate_group_and", "[crafting][requirement_index]" )
+{
+    // (stick >= 1) AND (soldering iron >= 1): both groups must be met.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( {
+        make_group( group_kind::component, { make_option( "stick", 1 ) } ),
+        make_group( group_kind::component, { make_option( "soldering_iron", 1 ) } )
+    } );
+
+    inventory both;
+    both.add_item( item( itype_id( "stick" ) ) );
+    both.add_item( item( itype_id( "soldering_iron" ) ) );
+    CHECK( eval_plan( "p3a_group_and", plan, both ) ==
+           crafting_requirement_result::satisfied );
+
+    inventory only_stick;
+    only_stick.add_item( item( itype_id( "stick" ) ) );
+    CHECK( eval_plan( "p3a_group_and", plan, only_stick ) ==
+           crafting_requirement_result::unsatisfied );
+}
+
+TEST_CASE( "phase3a_evaluate_alternative_or", "[crafting][requirement_index]" )
+{
+    // alt 0: stick >= 10; alt 1: soldering iron >= 1.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                     { make_option( "stick", 10 ) } ) } );
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                     { make_option( "soldering_iron", 1 ) } ) } );
+
+    inventory inv;
+    inv.add_item( item( itype_id( "soldering_iron" ) ) );
+    CHECK( eval_plan( "p3a_alt_or", plan, inv ) ==
+           crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_alt_or", plan, make_stick_inventory( 9 ) ) ==
+           crafting_requirement_result::unsatisfied );
+}
+
+TEST_CASE( "phase3a_evaluate_satisfied_alternative_overrides_unknown", "[crafting][requirement_index]" )
+{
+    // alt 0 contains a quality option (always unknown); alt 1 is exactly
+    // satisfiable. The satisfied alternative wins over the unknown one.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::quality,
+                                     { make_option( "CUT", 1,
+                                       fact_kind::quality_providers, 1 ) } ) } );
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                     { make_option( "stick", 1 ) } ) } );
+
+    CHECK( eval_plan( "p3a_alt_beats_unknown", plan, make_stick_inventory( 1 ) ) ==
+           crafting_requirement_result::satisfied );
+    // With no sticks, alt 1 is unsatisfied and alt 0 is unknown: unknown.
+    CHECK( eval_plan( "p3a_alt_beats_unknown", plan, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_unsatisfied_plus_unknown_yields_unknown", "[crafting][requirement_index]" )
+{
+    // alt 0 is exactly unsatisfied; alt 1 is unknown (quality). OR of
+    // unsatisfied and unknown must be unknown, never unsatisfied.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                     { make_option( "stick", 3 ) } ) } );
+    plan.alternatives.push_back( { make_group( group_kind::quality,
+                                     { make_option( "CUT", 1,
+                                       fact_kind::quality_providers, 1 ) } ) } );
+
+    CHECK( eval_plan( "p3a_unsat_plus_unknown", plan, make_stick_inventory( 1 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_empty_alternative_satisfied", "[crafting][requirement_index]" )
+{
+    // alt 0 requires an unobtainable component; alt 1 has zero groups and is
+    // trivially satisfied with any inventory.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                     { make_option( "unobtainium", 1 ) } ) } );
+    plan.alternatives.emplace_back();
+
+    CHECK( eval_plan( "p3a_empty_alt", plan, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::satisfied );
+
+    // An entirely empty single alternative is also trivially satisfied.
+    crafting_requirement_plan only_empty;
+    only_empty.alternatives.emplace_back();
+    CHECK( eval_plan( "p3a_only_empty", only_empty, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::satisfied );
+}
+
+TEST_CASE( "phase3a_evaluate_quality_fact_inexact_is_unknown", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_plan plan = one_group_plan( group_kind::quality,
+    { make_option( "HAMMER", 1, fact_kind::quality_providers, 1 ) } );
+
+    // Even a quality-supplying inventory cannot make the inexact fact exact.
+    inventory inv;
+    inv.add_item( item( itype_id( "rock" ) ) );
+    CHECK( eval_plan( "p3a_quality", plan, inv ) ==
+           crafting_requirement_result::unknown );
+    CHECK( eval_plan( "p3a_quality", plan, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_wildcard_any_is_unknown", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "any", 1 ) } );
+
+    CHECK( eval_plan( "p3a_wildcard", plan, make_stick_inventory( 10 ) ) ==
+           crafting_requirement_result::unknown );
+    CHECK( eval_plan( "p3a_wildcard", plan, make_stick_inventory( 0 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_component_id_in_two_groups_is_unknown", "[crafting][requirement_index]" )
+{
+    // The same component id in two distinct component groups: allocation is
+    // ambiguous even when the counts would individually suffice.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( {
+        make_group( group_kind::component, { make_option( "stick", 1 ) } ),
+        make_group( group_kind::component, { make_option( "stick", 1 ) } )
+    } );
+
+    CHECK( eval_plan( "p3a_dup_component", plan, make_stick_inventory( 10 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_component_tool_overlap_is_unknown", "[crafting][requirement_index]" )
+{
+    // A component id that also appears in a tool group resolves to unknown.
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( {
+        make_group( group_kind::component, { make_option( "stick", 1 ) } ),
+        make_group( group_kind::tool,
+        { make_option( "stick", 1, fact_kind::tool_instances ) } )
+    } );
+
+    CHECK( eval_plan( "p3a_comp_tool_overlap", plan, make_stick_inventory( 10 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_unsupported_missing_unfinalized_are_unknown", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 1 ) } );
+
+    // Unsupported recipe: retained but never evaluated.
+    crafting_requirement_index index;
+    CHECK( index.add_unsupported_recipe( rid( "p3a_unsupported" ), "not supported" ) );
+    index.finalize();
+    const crafting_inventory_snapshot snap( index, make_stick_inventory( 5 ) );
+    const crafting_requirement_evaluator eval( index, snap );
+    CHECK( eval.evaluate( rid( "p3a_unsupported" ), menu_mode::normal ) ==
+           crafting_requirement_result::unknown );
+    // Missing recipe id.
+    CHECK( eval.evaluate( rid( "p3a_missing" ), menu_mode::normal ) ==
+           crafting_requirement_result::unknown );
+
+    // Unfinalized index: even a fully satisfiable plan stays unknown.
+    CHECK( eval_plan( "p3a_unfinalized", plan, make_stick_inventory( 5 ),
+                      menu_mode::normal, uniform_profiles( recipe_filter_none ),
+                      false ) == crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_invalid_menu_enum_is_unknown", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 1 ) } );
+
+    constexpr int invalid_menu = menu_filter_mode_count;
+    CHECK( eval_plan( "p3a_bad_menu", plan, make_stick_inventory( 5 ),
+                      static_cast<menu_mode>( invalid_menu ) ) ==
+           crafting_requirement_result::unknown );
+    CHECK( eval_plan( "p3a_bad_menu", plan, make_stick_inventory( 5 ),
+                      static_cast<menu_mode>( -1 ) ) ==
+           crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "phase3a_evaluate_mode_specific_effective_filter_profiles", "[crafting][requirement_index]" )
+{
+    // Recipe profiles: normal = none, no_rotten = none,
+    // no_favorite = favorite_forbidden. One favorite stick satisfies the
+    // requirement under normal/no_rotten but not under no_favorite.
+    const profiles_array profiles = make_profiles(
+                                        recipe_filter_none,
+                                        recipe_filter_none,
+                                        recipe_filter_favorite_forbidden );
+    const crafting_requirement_plan plan = one_group_plan( group_kind::component,
+    { make_option( "stick", 1 ) } );
+
+    inventory inv;
+    item favorite_stick( itype_id( "stick" ) );
+    favorite_stick.is_favorite = true;
+    inv.add_item( favorite_stick );
+
+    CHECK( eval_plan( "p3a_mode_profiles", plan, inv, menu_mode::normal,
+                      profiles ) == crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_mode_profiles", plan, inv, menu_mode::no_rotten,
+                      profiles ) == crafting_requirement_result::satisfied );
+    CHECK( eval_plan( "p3a_mode_profiles", plan, inv, menu_mode::no_favorite,
+                      profiles ) == crafting_requirement_result::unsatisfied );
+}

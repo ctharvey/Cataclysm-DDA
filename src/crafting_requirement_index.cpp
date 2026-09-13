@@ -623,3 +623,157 @@ bool crafting_requirement_tally::meets(
     }
     return count_for( key ) >= threshold;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3A: conservative tri-state shadow evaluation.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+// Conservative tri-state OR: satisfied wins; otherwise unknown beats
+// unsatisfied.
+crafting_requirement_result or_reduce( crafting_requirement_result a,
+                                       crafting_requirement_result b )
+{
+    if( a == crafting_requirement_result::satisfied ||
+        b == crafting_requirement_result::satisfied ) {
+        return crafting_requirement_result::satisfied;
+    }
+    if( a == crafting_requirement_result::unknown ||
+        b == crafting_requirement_result::unknown ) {
+        return crafting_requirement_result::unknown;
+    }
+    return crafting_requirement_result::unsatisfied;
+}
+
+// Conservative tri-state AND: unsatisfied wins; otherwise unknown beats
+// satisfied.
+crafting_requirement_result and_reduce( crafting_requirement_result a,
+                                        crafting_requirement_result b )
+{
+    if( a == crafting_requirement_result::unsatisfied ||
+        b == crafting_requirement_result::unsatisfied ) {
+        return crafting_requirement_result::unsatisfied;
+    }
+    if( a == crafting_requirement_result::unknown ||
+        b == crafting_requirement_result::unknown ) {
+        return crafting_requirement_result::unknown;
+    }
+    return crafting_requirement_result::satisfied;
+}
+
+// Conservative allocation guard: a component item id that appears in more
+// than one distinct group, or in any tool group, could be double-counted
+// by a naive check, so this alternative is unknown. Tools are reusable, so
+// an item id in multiple tool groups is not a problem; only component ids
+// are consumed.
+crafting_requirement_result allocation_guard(
+    const crafting_requirement_alternative &alt )
+{
+    std::set<std::string> component_ids;
+    std::set<std::string> tool_ids;
+    for( const crafting_requirement_group &grp : alt ) {
+        std::set<std::string> group_ids;
+        for( const crafting_requirement_option &opt : grp.options ) {
+            if( !group_ids.insert( opt.id ).second ) {
+                continue;
+            }
+            if( grp.kind == requirement_group_kind::component ) {
+                if( tool_ids.count( opt.id ) ) {
+                    return crafting_requirement_result::unknown;
+                }
+                if( component_ids.count( opt.id ) ) {
+                    // Same component id in more than one distinct
+                    // component group: allocation is ambiguous.
+                    return crafting_requirement_result::unknown;
+                }
+                component_ids.insert( opt.id );
+            } else if( grp.kind == requirement_group_kind::tool ) {
+                if( component_ids.count( opt.id ) ) {
+                    // Component id also appears in a tool group.
+                    return crafting_requirement_result::unknown;
+                }
+                tool_ids.insert( opt.id );
+            }
+        }
+    }
+    return crafting_requirement_result::satisfied;
+}
+
+} // namespace
+
+crafting_requirement_evaluator::crafting_requirement_evaluator(
+    const crafting_requirement_index &index,
+    const crafting_inventory_snapshot &snapshot ) : index_( index ),
+    snapshot_( snapshot )
+{
+}
+
+crafting_requirement_result crafting_requirement_evaluator::evaluate(
+    const recipe_id &recipe_id, menu_filter_mode menu ) const
+{
+    const int menu_index = static_cast<int>( menu );
+    if( menu_index < 0 || menu_index >= menu_filter_mode_count ) {
+        return crafting_requirement_result::unknown;
+    }
+    if( !index_.is_finalized() || !index_.has_recipe( recipe_id ) ) {
+        return crafting_requirement_result::unknown;
+    }
+    const crafting_recipe_support *support = index_.support_for( recipe_id );
+    if( support == nullptr ||
+        support->state != recipe_support_state::supported ) {
+        return crafting_requirement_result::unknown;
+    }
+    const crafting_requirement_plan *plan = index_.plan_for( recipe_id );
+    if( plan == nullptr || plan->alternatives.empty() ) {
+        return crafting_requirement_result::unknown;
+    }
+
+    const int effective_profile = index_.effective_profile_for( recipe_id, menu );
+    crafting_requirement_result result = crafting_requirement_result::unsatisfied;
+    for( const crafting_requirement_alternative &alt : plan->alternatives ) {
+        // Empty alternative (zero groups) is trivially satisfied.
+        crafting_requirement_result alt_result =
+            alt.empty()
+            ? crafting_requirement_result::satisfied
+            : allocation_guard( alt );
+        if( alt_result != crafting_requirement_result::unknown ) {
+            for( const crafting_requirement_group &grp : alt ) {
+                // OR of options within the group; empty groups are
+                // rejected by the index, but stay conservative anyway.
+                crafting_requirement_result group_result =
+                    grp.options.empty()
+                    ? crafting_requirement_result::unknown
+                    : crafting_requirement_result::unsatisfied;
+                for( const crafting_requirement_option &opt : grp.options ) {
+                    crafting_requirement_fact_key key = derive_key( opt,
+                            opt.kind == crafting_requirement_fact_kind::quality_providers
+                            ? recipe_filter_none
+                            : effective_profile );
+                    if( key.id == "any" || !snapshot_.is_exact( key ) ) {
+                        group_result = or_reduce( group_result,
+                                                  crafting_requirement_result::unknown );
+                    } else {
+                        group_result = or_reduce( group_result,
+                                                  snapshot_.meets( key, opt.threshold )
+                                                  ? crafting_requirement_result::satisfied
+                                                  : crafting_requirement_result::unsatisfied );
+                    }
+                    if( group_result == crafting_requirement_result::satisfied ) {
+                        break;
+                    }
+                }
+                alt_result = and_reduce( alt_result, group_result );
+                if( alt_result == crafting_requirement_result::unsatisfied ) {
+                    break;
+                }
+            }
+        }
+        result = or_reduce( result, alt_result );
+        if( result == crafting_requirement_result::satisfied ) {
+            break;
+        }
+    }
+    return result;
+}

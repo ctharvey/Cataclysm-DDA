@@ -312,4 +312,41 @@ class crafting_inventory_snapshot
         std::set<crafting_requirement_fact_key> unsupported_keys_;
 };
 
+// Tri-state result of shadow evaluation. `unknown` MUST fall back to the
+// legacy requirement check; only `satisfied`/`unsatisfied` may be used
+// directly, and only for a single-craft (batch size 1) check.
+enum class crafting_requirement_result {
+    satisfied = 0,
+    unsatisfied,
+    unknown
+};
+
+// Phase 3A: conservative tri-state shadow evaluator for crafting
+// requirement plans.
+//
+// This is batch-size-1 inventory-only shadow evaluation. It consults only
+// the facts tracked by the snapshot; any uncertainty (inexact fact,
+// wildcard "any" component, a component id shared across groups or with a
+// tool group, unsupported/missing plan data) resolves to `unknown`.
+// Callers MUST fall back to the legacy crafting requirement path on
+// `unknown`. Holds only const references; exposes no pointers or mutable
+// state. Both referenced objects must outlive the evaluator.
+class crafting_requirement_evaluator
+{
+    public:
+        crafting_requirement_evaluator( const crafting_requirement_index &index,
+                                        const crafting_inventory_snapshot &snapshot );
+
+        // Evaluates the recipe's plan under the given menu mode.
+        // Returns `unknown` if the index is not finalized, the recipe is
+        // absent, unsupported, or has no plan, or if any part of the plan
+        // cannot be resolved exactly against the snapshot.
+        crafting_requirement_result evaluate( const recipe_id &recipe_id,
+                                              menu_filter_mode menu ) const;
+
+    private:
+        const crafting_requirement_index &index_;
+        const crafting_inventory_snapshot &snapshot_;
+};
+
 #endif // CATA_SRC_CRAFTING_REQUIREMENT_INDEX_H
