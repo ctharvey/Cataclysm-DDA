@@ -14,6 +14,7 @@
 #include "character_attire.h"
 #include "color.h"
 #include "crafting_gui_helpers.h"
+#include "crafting_requirement_index.h"
 #include "flat_set.h"
 #include "npc.h"
 #include "recipe_dictionary.h"
@@ -160,6 +161,77 @@ TEST_CASE( "recipe_availability_would_use_favorite", "[crafting][gui]" )
     CHECK( avail.can_craft_recipe );
     CHECK( avail.would_use_favorite );
     CHECK( avail.color() == c_pink );
+}
+
+TEST_CASE( "recipe_availability_requirement_cache_exact_positive", "[crafting][gui]" )
+{
+    Character &guy = setup_character();
+    guy.set_skill_level( skill_fabrication, 2 );
+    guy.set_skill_level( skill_melee, 1 );
+    item fav_2x4( itype_2x4 );
+    fav_2x4.set_favorite( true );
+    guy.i_add( fav_2x4 );
+    guy.invalidate_crafting_inventory();
+
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    const recipe &rec = recipe_cudgel_test_no_tools.obj();
+    REQUIRE( cache.evaluate( rec.ident(), menu_filter_mode::normal ) ==
+             crafting_requirement_result::satisfied );
+    REQUIRE( cache.evaluate( rec.ident(), menu_filter_mode::no_favorite ) ==
+             crafting_requirement_result::unsatisfied );
+
+    const availability legacy( guy, &rec );
+    const availability cached( guy, &rec, 1, false, nullptr, &cache );
+    CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+    CHECK( cached.would_use_rotten == legacy.would_use_rotten );
+    CHECK( cached.would_use_favorite == legacy.would_use_favorite );
+    CHECK( cached.apparently_craftable == legacy.apparently_craftable );
+    CHECK( cached.color() == legacy.color() );
+}
+
+TEST_CASE( "recipe_availability_requirement_cache_exact_negative", "[crafting][gui]" )
+{
+    Character &guy = setup_character();
+    guy.set_skill_level( skill_fabrication, 2 );
+    guy.set_skill_level( skill_melee, 1 );
+    guy.invalidate_crafting_inventory();
+
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    const recipe &rec = recipe_cudgel_test_no_tools.obj();
+    REQUIRE( cache.evaluate( rec.ident(), menu_filter_mode::normal ) ==
+             crafting_requirement_result::unsatisfied );
+
+    const availability legacy( guy, &rec );
+    const availability cached( guy, &rec, 1, false, nullptr, &cache );
+    CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+    CHECK( cached.apparently_craftable == legacy.apparently_craftable );
+    CHECK( cached.color() == legacy.color() );
+}
+
+TEST_CASE( "recipe_availability_requirement_cache_nested", "[crafting][gui]" )
+{
+    Character &guy = setup_character();
+    guy.set_skill_level( skill_fabrication, 2 );
+    guy.set_skill_level( skill_melee, 1 );
+    guy.i_add( item( itype_2x4 ) );
+    guy.invalidate_crafting_inventory();
+
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    REQUIRE( cache.evaluate( recipe_cudgel_test_no_tools, menu_filter_mode::normal ) ==
+             crafting_requirement_result::satisfied );
+
+    const recipe &nested = recipe_test_nested_weapons.obj();
+    const availability legacy( guy, &nested );
+    const availability cached( guy, &nested, 1, false, nullptr, &cache );
+    CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+    CHECK( cached.is_nested_category );
+    CHECK( cached.color() == legacy.color() );
 }
 
 TEST_CASE( "recipe_availability_useless_practice", "[crafting][gui]" )

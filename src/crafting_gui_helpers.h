@@ -16,6 +16,7 @@
 #include "translation.h"
 
 class Character;
+class crafting_requirement_result_cache;
 class inventory;
 class recipe;
 class recipe_subset;
@@ -31,7 +32,8 @@ bool cannot_gain_skill_or_prof( const Character &crafter, const recipe &recp );
 // Stores craftability flags, color-coding, and lazy-cached proficiency maluses.
 struct availability {
         explicit availability( Character &_crafter, const recipe *recp, int batch_size = 1,
-                               bool camp_crafting = false, inventory *inventory_override = nullptr );
+                               bool camp_crafting = false, inventory *inventory_override = nullptr,
+                               const crafting_requirement_result_cache *requirement_cache = nullptr );
         Character &crafter;
         bool can_craft_recipe;
         // group can introduce recipe this crafter cannot craft because of low primary skill
@@ -63,7 +65,8 @@ struct availability {
         nc_color selected_color() const;
         nc_color color( bool ignore_missing_skills = false ) const;
 
-        static bool check_can_craft_nested( Character &_crafter, const recipe &r );
+        static bool check_can_craft_nested( Character &_crafter, const recipe &r,
+                                            const crafting_requirement_result_cache *requirement_cache = nullptr );
 };
 
 enum class craft_confirm_result {
@@ -163,7 +166,8 @@ recipe_list_data build_recipe_list(
     bool highlight_unread,
     bool unread_first,
     std::map<const recipe *, availability> &availability_cache,
-    const recipe_subset &available_recipes );
+    const recipe_subset &available_recipes,
+    const crafting_requirement_result_cache *requirement_cache = nullptr );
 
 // Generates a colored hierarchical text description of nested recipe contents.
 // Used by the item info panel when a nested category is selected.

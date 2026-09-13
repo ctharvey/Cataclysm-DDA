@@ -31,6 +31,7 @@
 #include "crafting.h"
 #include "crafting_enums.h"
 #include "crafting_gui_helpers.h"
+#include "crafting_requirement_index.h"
 #include "display.h"
 #include "flag.h"
 #include "flat_set.h"
@@ -521,6 +522,9 @@ class crafting_ui_impl : public cataimgui::window
         // --- Caches ---
         std::map<character_id, std::map<const recipe *, availability>> guy_availability_cache;
         std::map<const recipe *, availability> *availability_cache;
+        std::map<character_id, std::unique_ptr<crafting_requirement_result_cache>>
+        guy_requirement_caches;
+        const crafting_requirement_result_cache *requirement_cache = nullptr;
         std::unique_ptr<recipe_result_info_cache> result_info;
 
         // --- Tool group expansion state ---
@@ -564,8 +568,27 @@ class crafting_ui_impl : public cataimgui::window
         void recalculate_recipes();
         void recalculate_unread();
         void invalidate_info_panels();
+        void select_crafter_caches();
 };
 } // namespace
+
+void crafting_ui_impl::select_crafter_caches()
+{
+    const character_id id = crafter->getID();
+    availability_cache = &guy_availability_cache[id];
+    requirement_cache = nullptr;
+    if( camp_crafting ) {
+        return;
+    }
+
+    std::unique_ptr<crafting_requirement_result_cache> &cache = guy_requirement_caches[id];
+    if( !cache ) {
+        const crafting_requirement_index &index = recipe_dict.requirement_index();
+        const crafting_inventory_snapshot snapshot( index, crafter->crafting_inventory() );
+        cache = std::make_unique<crafting_requirement_result_cache>( index, snapshot );
+    }
+    requirement_cache = cache.get();
+}
 
 // --- Constructor ---
 
@@ -588,7 +611,7 @@ crafting_ui_impl::crafting_ui_impl( Character *crafter, const recipe_id &goto_re
                            crafter ) - crafting_group.begin();
 
     available_recipes = &crafter->get_group_available_recipes( inventory_override );
-    availability_cache = &guy_availability_cache[crafter->getID()];
+    select_crafter_caches();
 
     result_info = std::make_unique<recipe_result_info_cache>( *crafter );
 
@@ -2418,7 +2441,8 @@ void crafting_ui_impl::recalculate_recipes()
                                            std::move( picking ), skip_hidden, skip_sort,
                                            *crafter, camp_crafting, inventory_override,
                                            highlight_unread, unread_recipes_first,
-                                           *availability_cache, *available_recipes );
+                                           *availability_cache, *available_recipes,
+                                           requirement_cache );
         current = std::move( list_result.entries );
         indent_vec = std::move( list_result.indent );
         available = std::move( list_result.available );
@@ -2789,7 +2813,7 @@ void crafting_ui_impl::process_action( const std::string &action_in,
             crafter_i = new_crafter_i;
             crafter = crafting_group[crafter_i];
             available_recipes = &crafter->get_group_available_recipes( inventory_override );
-            availability_cache = &guy_availability_cache[crafter->getID()];
+            select_crafter_caches();
             result_info = std::make_unique<recipe_result_info_cache>( *crafter );
 
             recalc = true;
