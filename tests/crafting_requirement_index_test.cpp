@@ -1861,6 +1861,12 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
     for( const phase3b_inventory_case &c : cases ) {
         snapshots.emplace_back( index, c.inv );
     }
+    std::vector<crafting_requirement_result_cache> caches;
+    caches.reserve( snapshots.size() );
+    for( const crafting_inventory_snapshot &snapshot : snapshots ) {
+        caches.emplace_back( index, snapshot );
+        CHECK( caches.back().cached_recipe_count() == index.recipe_count() );
+    }
 
     const std::array<menu_mode, menu_filter_mode_count> menus = { {
             menu_mode::normal, menu_mode::no_rotten, menu_mode::no_favorite
@@ -1898,6 +1904,10 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
             for( std::size_t m = 0; m < menu_filter_mode_count; ++m ) {
                 const crafting_requirement_result result =
                     eval.evaluate( id, menus[m] );
+                INFO( "recipe: " << id.str() );
+                INFO( "menu: " << menu_names[m] );
+                INFO( "inventory: " << cases[ci].label );
+                CHECK( caches[ci].evaluate( id, menus[m] ) == result );
                 if( result == crafting_requirement_result::unknown ) {
                     // Unknown results are counted but never compared: the
                     // legacy path is the mandatory fallback there.
@@ -1936,4 +1946,74 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
     CAPTURE( exact_comparisons );
     // The matrix must actually compare something.
     REQUIRE( exact_comparisons > 0 );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3C: bulk result cache.
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "phase3c_result_cache_boundaries", "[crafting][requirement_index]" )
+{
+    // One supported exact recipe, one supported recipe that is never
+    // satisfiable, and one unsupported record.
+    crafting_requirement_index index;
+    crafting_requirement_plan exact;
+    exact.alternatives.push_back( { make_group( group_kind::component,
+                                       { make_option( "stick", 2 ) } ) } );
+    CHECK( index.add_recipe( rid( "p3c_exact" ), exact,
+                             uniform_profiles( recipe_filter_none ) ) );
+    crafting_requirement_plan unobtainable;
+    unobtainable.alternatives.push_back( { make_group( group_kind::component,
+                                            { make_option( "unobtainium", 1 ) } ) } );
+    CHECK( index.add_recipe( rid( "p3c_unobtainable" ), unobtainable,
+                             uniform_profiles( recipe_filter_none ) ) );
+    CHECK( index.add_unsupported_recipe( rid( "p3c_unsupported" ), "no plan" ) );
+    index.finalize();
+
+    const crafting_inventory_snapshot snap( index, make_stick_inventory( 2 ) );
+
+    SECTION( "finalized cache: exact outcomes across all menu modes" ) {
+        const crafting_requirement_result_cache cache( index, snap );
+        // The cache covers supported and unsupported records alike.
+        CHECK( cache.cached_recipe_count() == index.recipe_count() );
+        CHECK( index.recipe_count() == 3 );
+
+        const std::array<menu_mode, menu_filter_mode_count> menus = { {
+                menu_mode::normal, menu_mode::no_rotten, menu_mode::no_favorite
+            }
+        };
+        for( const menu_mode m : menus ) {
+            CHECK( cache.evaluate( rid( "p3c_exact" ), m ) ==
+                   crafting_requirement_result::satisfied );
+            CHECK( cache.evaluate( rid( "p3c_unobtainable" ), m ) ==
+                   crafting_requirement_result::unsatisfied );
+            // Unsupported and missing recipes stay unknown.
+            CHECK( cache.evaluate( rid( "p3c_unsupported" ), m ) ==
+                   crafting_requirement_result::unknown );
+            CHECK( cache.evaluate( rid( "p3c_missing" ), m ) ==
+                   crafting_requirement_result::unknown );
+        }
+    }
+
+    SECTION( "invalid menu enums yield unknown" ) {
+        const crafting_requirement_result_cache cache( index, snap );
+        CHECK( cache.evaluate( rid( "p3c_exact" ),
+                               static_cast<menu_mode>( menu_filter_mode_count ) ) ==
+               crafting_requirement_result::unknown );
+        CHECK( cache.evaluate( rid( "p3c_exact" ),
+                               static_cast<menu_mode>( -1 ) ) ==
+               crafting_requirement_result::unknown );
+    }
+
+    SECTION( "unfinalized index produces empty cache and unknown" ) {
+        crafting_requirement_index unfinished;
+        CHECK( unfinished.add_recipe( rid( "p3c_exact" ), exact,
+                                      uniform_profiles( recipe_filter_none ) ) );
+        const crafting_inventory_snapshot unfinished_snap( unfinished,
+                make_stick_inventory( 2 ) );
+        const crafting_requirement_result_cache cache( unfinished, unfinished_snap );
+        CHECK( cache.cached_recipe_count() == 0 );
+        CHECK( cache.evaluate( rid( "p3c_exact" ), menu_mode::normal ) ==
+               crafting_requirement_result::unknown );
+    }
 }

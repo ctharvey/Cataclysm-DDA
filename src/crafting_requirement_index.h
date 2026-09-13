@@ -182,6 +182,10 @@ class crafting_requirement_index
         std::size_t recipe_count() const;
         bool has_recipe( const recipe_id &recipe_id ) const;
 
+        // All retained recipe ids (supported and unsupported), in recipe_id
+        // order; deterministic across calls.
+        std::vector<recipe_id> recipe_ids() const;
+
         // Number of distinct fact keys registered in the index.
         std::size_t fact_count() const;
 
@@ -347,6 +351,37 @@ class crafting_requirement_evaluator
     private:
         const crafting_requirement_index &index_;
         const crafting_inventory_snapshot &snapshot_;
+};
+
+// Phase 3C: production-only bulk result cache.
+//
+// Precomputes, at construction time, the tri-state evaluation result of
+// every retained recipe under every menu filter mode, exactly as the
+// Phase 3A direct evaluator would produce it (the direct evaluator remains
+// the oracle/fallback for anything this cache reports as `unknown`).
+//
+// Pointer-free: the constructor reads the index and snapshot once and
+// stores only values; no references or pointers to either object survive
+// construction, so the cache outlives them safely. Results are valid for
+// batch-size-1 checks only; `unknown` must fall back to the legacy
+// requirement path. When the index is not finalized the cache stays empty
+// and every evaluate() returns `unknown`.
+class crafting_requirement_result_cache
+{
+    public:
+        crafting_requirement_result_cache( const crafting_requirement_index &index,
+                                           const crafting_inventory_snapshot &snapshot );
+
+        // Cached result for the recipe under the menu mode; `unknown` for
+        // an invalid menu mode or an id absent from the cache.
+        crafting_requirement_result evaluate( const recipe_id &recipe_id,
+                                              menu_filter_mode menu ) const;
+
+        // Number of recipes with a cached per-mode result.
+        std::size_t cached_recipe_count() const;
+
+    private:
+        std::map<recipe_id, std::array<crafting_requirement_result, menu_filter_mode_count>> results_;
 };
 
 #endif // CATA_SRC_CRAFTING_REQUIREMENT_INDEX_H

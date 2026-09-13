@@ -501,6 +501,16 @@ std::size_t crafting_requirement_index::recipe_count() const
     return recipes_.size();
 }
 
+std::vector<recipe_id> crafting_requirement_index::recipe_ids() const
+{
+    std::vector<recipe_id> ids;
+    ids.reserve( recipes_.size() );
+    for( const auto &entry : recipes_ ) {
+        ids.push_back( entry.first );
+    }
+    return ids;
+}
+
 bool crafting_requirement_index::has_recipe( const recipe_id &recipe_id ) const
 {
     return recipes_.count( recipe_id ) != 0;
@@ -779,4 +789,164 @@ crafting_requirement_result crafting_requirement_evaluator::evaluate(
         }
     }
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3C: production-only bulk result cache.
+// ---------------------------------------------------------------------------
+
+crafting_requirement_result_cache::crafting_requirement_result_cache(
+    const crafting_requirement_index &index,
+    const crafting_inventory_snapshot &snapshot )
+{
+    // An unfinalized index carries unsorted/undeduplicated thresholds and
+    // edges; refuse to guess and leave the cache empty.
+    if( !index.is_finalized() ) {
+        return;
+    }
+
+    // Plan-shaped group accumulators: one tri-state per group per menu mode.
+    // Recipes without a usable plan (unsupported, missing, or malformed)
+    // never enter the accumulator map and cache unknown for all modes.
+    struct plan_state {
+        std::vector<std::vector<crafting_requirement_result>> groups;
+    };
+    std::map<recipe_id, std::array<plan_state, menu_filter_mode_count>> states;
+    const std::vector<recipe_id> ids = index.recipe_ids();
+    for( const recipe_id &id : ids ) {
+        const crafting_requirement_plan *plan = index.plan_for( id );
+        if( plan == nullptr || plan->alternatives.empty() ) {
+            continue;
+        }
+        bool malformed = false;
+        for( const crafting_requirement_alternative &alt : plan->alternatives ) {
+            for( const crafting_requirement_group &grp : alt ) {
+                if( grp.options.empty() ) {
+                    malformed = true;
+                }
+            }
+        }
+        if( malformed ) {
+            continue;
+        }
+        std::array<plan_state, menu_filter_mode_count> &st = states[id];
+        for( plan_state &ps : st ) {
+            ps.groups.resize( plan->alternatives.size() );
+            for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {
+                ps.groups[a].assign( plan->alternatives[a].size(),
+                                     crafting_requirement_result::unsatisfied );
+            }
+        }
+    }
+
+    // One pass over every fact key: compute the highest registered threshold
+    // crossed by the snapshot count once, then visit every dependent edge.
+    for( const crafting_requirement_fact_key &key : index.fact_keys() ) {
+        const int count = snapshot.count_for( key );
+        const bool exact = snapshot.is_exact( key );
+        const bool wildcard = key.id == "any";
+        int highest_crossed = 0;
+        for( int threshold : index.thresholds_for( key ) ) {
+            if( threshold <= count && threshold > highest_crossed ) {
+                highest_crossed = threshold;
+            }
+        }
+        const bool component_fact = uses_component_filter( key.kind );
+        for( const crafting_requirement_edge &edge : index.edges_for( key ) ) {
+            auto it = states.find( edge.id );
+            if( it == states.end() ) {
+                continue;
+            }
+            const crafting_requirement_result option_state =
+                ( wildcard || !exact )
+                ? crafting_requirement_result::unknown
+                : ( edge.threshold <= highest_crossed
+                    ? crafting_requirement_result::satisfied
+                    : crafting_requirement_result::unsatisfied );
+            // Component facts are filter-profile specific: only the edge's
+            // own menu mode is touched. Tool/quality facts are unfiltered
+            // and broadcast to all menu modes.
+            const int first_mode = component_fact
+                                   ? static_cast<int>( edge.menu )
+                                   : 0;
+            const int mode_limit = component_fact
+                                   ? first_mode + 1
+                                   : menu_filter_mode_count;
+            for( int m = first_mode; m < mode_limit; ++m ) {
+                std::vector<std::vector<crafting_requirement_result>> &groups =
+                    it->second[static_cast<std::size_t>( m )].groups;
+                if( static_cast<std::size_t>( edge.alternative ) >= groups.size() ) {
+                    continue;
+                }
+                std::vector<crafting_requirement_result> &grp =
+                    groups[static_cast<std::size_t>( edge.alternative )];
+                if( static_cast<std::size_t>( edge.group ) >= grp.size() ) {
+                    continue;
+                }
+                grp[static_cast<std::size_t>( edge.group )] =
+                    or_reduce( grp[static_cast<std::size_t>( edge.group )], option_state );
+            }
+        }
+    }
+
+    // Reduce option OR -> group, group AND -> alternative, alternative
+    // OR -> recipe, exactly as the direct evaluator does.
+    for( const recipe_id &id : ids ) {
+        std::array<crafting_requirement_result, menu_filter_mode_count> res;
+        res.fill( crafting_requirement_result::unknown );
+        auto it = states.find( id );
+        if( it != states.end() ) {
+            const crafting_requirement_plan *plan = index.plan_for( id );
+            for( int m = 0; m < menu_filter_mode_count; ++m ) {
+                const std::vector<std::vector<crafting_requirement_result>> &groups =
+                    it->second[static_cast<std::size_t>( m )].groups;
+                crafting_requirement_result mode_result =
+                    crafting_requirement_result::unsatisfied;
+                for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {
+                    const crafting_requirement_alternative &alt = plan->alternatives[a];
+                    crafting_requirement_result alt_result =
+                        alt.empty()
+                        ? crafting_requirement_result::satisfied
+                        : allocation_guard( alt );
+                    if( alt_result != crafting_requirement_result::unknown ) {
+                        for( std::size_t g = 0; g < alt.size(); ++g ) {
+                            const crafting_requirement_result group_result =
+                                alt[g].options.empty()
+                                ? crafting_requirement_result::unknown
+                                : groups[a][g];
+                            alt_result = and_reduce( alt_result, group_result );
+                            if( alt_result == crafting_requirement_result::unsatisfied ) {
+                                break;
+                            }
+                        }
+                    }
+                    mode_result = or_reduce( mode_result, alt_result );
+                    if( mode_result == crafting_requirement_result::satisfied ) {
+                        break;
+                    }
+                }
+                res[static_cast<std::size_t>( m )] = mode_result;
+            }
+        }
+        results_.emplace( id, res );
+    }
+}
+
+crafting_requirement_result crafting_requirement_result_cache::evaluate(
+    const recipe_id &recipe_id, menu_filter_mode menu ) const
+{
+    const int menu_index = static_cast<int>( menu );
+    if( menu_index < 0 || menu_index >= menu_filter_mode_count ) {
+        return crafting_requirement_result::unknown;
+    }
+    auto it = results_.find( recipe_id );
+    if( it == results_.end() ) {
+        return crafting_requirement_result::unknown;
+    }
+    return it->second[static_cast<std::size_t>( menu_index )];
+}
+
+std::size_t crafting_requirement_result_cache::cached_recipe_count() const
+{
+    return results_.size();
 }
