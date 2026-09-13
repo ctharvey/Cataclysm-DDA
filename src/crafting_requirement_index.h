@@ -5,10 +5,13 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "type_id.h"
+
+class inventory;
 
 // The kind of fact a requirement option ultimately counts against.
 enum class crafting_requirement_fact_kind : int {
@@ -249,6 +252,64 @@ class crafting_requirement_tally
         const crafting_requirement_index &index_;
         std::map<crafting_requirement_fact_key, int> counts_;
         std::map<crafting_requirement_fact_key, int> crossed_; // number of thresholds already crossed
+};
+
+class inventory;
+
+// A pointer-free snapshot of inventory counts against the facts registered
+// in a finalized index. Constructed from an index and an inventory, it
+// visits the concrete items once and stores only per-fact integer counts;
+// no item pointers survive construction. Only facts registered in the
+// index are ever incremented.
+class crafting_inventory_snapshot
+{
+    public:
+        // Builds the snapshot. The index and inventory are read during
+        // construction only; neither is referenced afterwards.
+        crafting_inventory_snapshot( const crafting_requirement_index &index,
+                                     const inventory &inv );
+
+        // Capped count for the fact, or 0 if unknown to the index.
+        int count_for( const crafting_requirement_fact_key &key ) const;
+
+        // True only when threshold is positive and the capped count for the
+        // fact has reached it.
+        bool meets( const crafting_requirement_fact_key &key, int threshold ) const;
+
+        // Number of fact keys tracked (the index allowlist size).
+        std::size_t fact_count() const;
+
+        // Number of tracked facts whose capped count has reached the index
+        // maximum for that fact.
+        std::size_t saturated_fact_count() const;
+
+        // True when the count for the fact is believed to exactly match
+        // legacy crafting behavior. False (inexact) for quality facts,
+        // whose legacy resolution can depend on charged/contained quality
+        // semantics and player state, and for tool_charges facts whose
+        // contributing tools can consult external pools (UPS, bionic
+        // power, multimag firing requirements); those retain only the
+        // local charge sum.
+        bool is_exact( const crafting_requirement_fact_key &key ) const;
+
+        // Number of tracked facts marked inexact.
+        std::size_t inexact_fact_count() const;
+
+        // Number of tracked tool_charges facts whose exact semantics
+        // require external pools that this snapshot does not consult.
+        // Phase 3 can treat these as unknown.
+        std::size_t unsupported_fact_count() const;
+
+        // Rough size of the snapshot's own bookkeeping in bytes, including
+        // this object and its per-fact maps.
+        std::size_t approximate_memory_bytes() const;
+
+    private:
+        std::size_t fact_total_ = 0;
+        std::map<crafting_requirement_fact_key, int> counts_;
+        std::set<crafting_requirement_fact_key> saturated_keys_;
+        std::set<crafting_requirement_fact_key> inexact_keys_;
+        std::set<crafting_requirement_fact_key> unsupported_keys_;
 };
 
 #endif // CATA_SRC_CRAFTING_REQUIREMENT_INDEX_H

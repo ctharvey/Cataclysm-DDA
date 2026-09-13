@@ -4,9 +4,12 @@
 #include <string>
 #include <vector>
 
+#include "calendar.h"
 #include "crafting_requirement_index.h"
 #include "type_id.h"
 #include "cata_catch.h"
+#include "flag.h"
+#include "inventory.h"
 #include "item.h"
 #include "itype.h"
 #include "recipe.h"
@@ -1091,4 +1094,383 @@ TEST_CASE( "requirement_index_loaded_dictionary_translation_normalization", "[cr
     CHECK( saw_rotten_base );
     CHECK( saw_frozen_base );
     CHECK( saw_magazine_base );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2B: crafting_inventory_snapshot core behavior over the plain stick
+// fixture (component_units facts capped at the index maximum).
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+crafting_requirement_index make_stick_index( int max_units )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                    { make_option( "stick", max_units ) } ) } );
+    CHECK( index.add_recipe( rid( "stick_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+    return index;
+}
+
+inventory make_stick_inventory( int count )
+{
+    inventory inv;
+    for( int i = 0; i < count; ++i ) {
+        inv.add_item( item( itype_id( "stick" ) ) );
+    }
+    return inv;
+}
+
+} // namespace
+
+TEST_CASE( "crafting_inventory_snapshot_counts_and_caps_units", "[crafting][requirement_index]" )
+{
+    const itype_id stick_type( "stick" );
+    REQUIRE_FALSE( item::count_by_charges( stick_type ) );
+    const crafting_requirement_index index = make_stick_index( 12 );
+    const crafting_requirement_fact_key stick = make_key( "stick" );
+
+    // Empty inventory: nothing counted, nothing saturated, threshold unmet.
+    const crafting_inventory_snapshot empty_snap( index, make_stick_inventory( 0 ) );
+    CHECK( empty_snap.count_for( stick ) == 0 );
+    CHECK_FALSE( empty_snap.meets( stick, 12 ) );
+    CHECK( empty_snap.fact_count() == index.fact_count() );
+    CHECK( empty_snap.saturated_fact_count() == 0 );
+
+    // Exactly at the maximum: capped at 12, saturated, threshold met.
+    const crafting_inventory_snapshot exact_snap( index, make_stick_inventory( 12 ) );
+    CHECK( exact_snap.count_for( stick ) == 12 );
+    CHECK( exact_snap.meets( stick, 12 ) );
+    CHECK( exact_snap.saturated_fact_count() == 1 );
+
+    // Vastly over the maximum: still capped at exactly 12.
+    const crafting_inventory_snapshot huge_snap( index, make_stick_inventory( 12000 ) );
+    CHECK( huge_snap.count_for( stick ) == 12 );
+    CHECK( huge_snap.meets( stick, 12 ) );
+    CHECK( huge_snap.saturated_fact_count() == 1 );
+
+    // The snapshot is pointer-free: mutating the source inventory afterwards
+    // leaves the completed snapshot untouched.
+    inventory inv = make_stick_inventory( 12 );
+    crafting_inventory_snapshot snap( index, inv );
+    CHECK( snap.count_for( stick ) == 12 );
+    inv.add_item( item( stick_type ) );
+    inv.add_item( item( stick_type ) );
+    CHECK( snap.count_for( stick ) == 12 );
+    CHECK( snap.saturated_fact_count() == 1 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_reports_memory_footprint", "[crafting][requirement_index]" )
+{
+    const crafting_requirement_index index = make_stick_index( 12 );
+    const crafting_inventory_snapshot snap( index, make_stick_inventory( 12 ) );
+    CHECK( snap.approximate_memory_bytes() >= sizeof( crafting_inventory_snapshot ) );
+}
+
+// Hidden benchmark-style report: same stick fixture, metrics only, no timing
+// assertions.
+TEST_CASE( "crafting_inventory_snapshot_metrics_report", "[.][crafting][benchmark]" )
+{
+    const crafting_requirement_index index = make_stick_index( 12 );
+    const crafting_requirement_fact_key stick = make_key( "stick" );
+    const crafting_inventory_snapshot snap( index, make_stick_inventory( 12000 ) );
+
+    CAPTURE( snap.approximate_memory_bytes() );
+    CAPTURE( snap.fact_count() );
+    CAPTURE( index.edges_for( stick ).size() );
+    CAPTURE( snap.saturated_fact_count() );
+    INFO( "memory=" << snap.approximate_memory_bytes()
+          << " facts=" << snap.fact_count()
+          << " edges=" << index.edges_for( stick ).size()
+          << " saturated=" << snap.saturated_fact_count() );
+    CHECK( snap.count_for( stick ) == 12 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_loaded_index_metrics_report",
+           "[.][crafting][benchmark]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    REQUIRE( index.is_finalized() );
+
+    const crafting_inventory_snapshot snap( index, make_stick_inventory( 12000 ) );
+    std::size_t edge_count = 0;
+    for( const crafting_requirement_fact_key &key : index.fact_keys() ) {
+        edge_count += index.edges_for( key ).size();
+    }
+
+    CAPTURE( snap.approximate_memory_bytes() );
+    CAPTURE( snap.fact_count() );
+    CAPTURE( edge_count );
+    CAPTURE( snap.saturated_fact_count() );
+    CAPTURE( snap.inexact_fact_count() );
+    CAPTURE( snap.unsupported_fact_count() );
+    CHECK( snap.fact_count() == index.fact_count() );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2B: known-fixture snapshot semantics -- charge saturation, pseudo
+// items, favorite/frozen filter profiles, and quality inexactness.
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "crafting_inventory_snapshot_charge_facts_saturate_at_maximum", "[crafting][requirement_index]" )
+{
+    const itype_id rock_type( "rock" );
+    REQUIRE( item::count_by_charges( rock_type ) );
+
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+                                    { make_option( "rock", 12,
+                                      fact_kind::component_charges ) } ) } );
+    CHECK( index.add_recipe( rid( "rock_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    const crafting_requirement_fact_key rock = make_key( "rock",
+            fact_kind::component_charges );
+
+    // Exactly at the maximum charge threshold.
+    inventory exact_inv;
+    item exact_rock( rock_type );
+    exact_rock.charges = 12;
+    exact_inv.add_item( exact_rock );
+    const crafting_inventory_snapshot exact_snap( index, exact_inv );
+    CHECK( exact_snap.count_for( rock ) == 12 );
+    CHECK( exact_snap.meets( rock, 12 ) );
+    CHECK( exact_snap.saturated_fact_count() == 1 );
+
+    // Vastly over the maximum: charges cap at exactly 12.
+    inventory huge_inv;
+    item huge_rock( rock_type );
+    huge_rock.charges = 12000;
+    huge_inv.add_item( huge_rock );
+    const crafting_inventory_snapshot huge_snap( index, huge_inv );
+    CHECK( huge_snap.count_for( rock ) == 12 );
+    CHECK( huge_snap.meets( rock, 12 ) );
+    CHECK( huge_snap.saturated_fact_count() == 1 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_pseudo_item_counts_as_tool_not_component", "[crafting][requirement_index]" )
+{
+    const itype_id stick_type( "stick" );
+    REQUIRE_FALSE( item::count_by_charges( stick_type ) );
+
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( {
+        make_group( group_kind::component,
+        { make_option( "stick", 1 ) } ),
+        make_group( group_kind::tool,
+        { make_option( "stick", 1, fact_kind::tool_instances ) } )
+    } );
+    CHECK( index.add_recipe( rid( "pseudo_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    inventory inv;
+    item stick( stick_type );
+    stick.set_flag( flag_PSEUDO );
+    inv.add_item( stick );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_fact_key component = make_key( "stick" );
+    const crafting_requirement_fact_key tool = make_key( "stick",
+            fact_kind::tool_instances );
+    CHECK( snap.count_for( component ) == 0 );
+    CHECK_FALSE( snap.meets( component, 1 ) );
+    CHECK( snap.count_for( tool ) == 1 );
+    CHECK( snap.meets( tool, 1 ) );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_favorite_and_frozen_profiles", "[crafting][requirement_index]" )
+{
+    // Three recipes share the same stick requirement but register facts
+    // under distinct effective filter profiles.
+    crafting_requirement_index index;
+    int profile_index = 0;
+    for( const int profile : { recipe_filter_none,
+                               recipe_filter_favorite_forbidden,
+                               recipe_filter_frozen_forbidden
+                             } ) {
+        crafting_requirement_plan plan;
+        plan.alternatives.push_back( { make_group( group_kind::component,
+                                        { make_option( "stick", 2 ) } ) } );
+        CHECK( index.add_recipe( rid( ( "profiled_stick_" +
+                                       std::to_string( profile_index++ ) ).c_str() ),
+                                 plan, uniform_profiles( profile ) ) );
+    }
+    index.finalize();
+
+    // One favorite stick and one frozen stick that is not EDIBLE_FROZEN.
+    inventory inv;
+    item favorite_stick( itype_id( "stick" ) );
+    favorite_stick.is_favorite = true;
+    inv.add_item( favorite_stick );
+    item frozen_stick( itype_id( "stick" ) );
+    frozen_stick.set_flag( flag_FROZEN );
+    inv.add_item( frozen_stick );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_fact_key stick = make_key( "stick" );
+    const crafting_requirement_fact_key no_favorite = make_key( "stick",
+            fact_kind::component_units, 0, recipe_filter_favorite_forbidden );
+    const crafting_requirement_fact_key no_frozen = make_key( "stick",
+            fact_kind::component_units, 0, recipe_filter_frozen_forbidden );
+
+    // Unfiltered profile accepts both sticks.
+    CHECK( snap.count_for( stick ) == 2 );
+    CHECK( snap.meets( stick, 1 ) );
+    // The favorite stick is rejected by the favorite-forbidden profile; only
+    // the frozen stick counts there.
+    CHECK( snap.count_for( no_favorite ) == 1 );
+    CHECK( snap.meets( no_favorite, 1 ) );
+    // The frozen non-EDIBLE_FROZEN stick is rejected by the frozen-forbidden
+    // profile; only the favorite stick counts there.
+    CHECK( snap.count_for( no_frozen ) == 1 );
+    CHECK( snap.meets( no_frozen, 1 ) );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_quality_facts_are_inexact", "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::quality,
+                                    { make_option( "HAMMER", 1,
+                                      fact_kind::quality_providers, 1 ) } ) } );
+    CHECK( index.add_recipe( rid( "hammer_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    // A rock supplies HAMMER 1.
+    inventory inv;
+    inv.add_item( item( itype_id( "rock" ) ) );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_fact_key hammer = make_key( "HAMMER",
+            fact_kind::quality_providers, 1 );
+    CHECK_FALSE( snap.is_exact( hammer ) );
+    CHECK( snap.inexact_fact_count() == 1 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_broken_items_are_excluded", "[crafting][requirement_index]" )
+{
+    REQUIRE_FALSE( item::count_by_charges( itype_id( "stick" ) ) );
+
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( {
+        make_group( group_kind::component,
+        { make_option( "stick", 1 ) } ),
+        make_group( group_kind::tool,
+        { make_option( "stick", 1, fact_kind::tool_instances ) } )
+    } );
+    CHECK( index.add_recipe( rid( "broken_stick_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    inventory inv;
+    item stick( itype_id( "stick" ) );
+    stick.set_flag( flag_ITEM_BROKEN );
+    REQUIRE( stick.is_broken() );
+    inv.add_item( stick );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    CHECK( snap.count_for( make_key( "stick" ) ) == 0 );
+    CHECK( snap.count_for( make_key( "stick", fact_kind::tool_instances ) ) == 0 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_rotten_profile_rejects_rotten", "[crafting][requirement_index]" )
+{
+    const itype_id mac_type( "macaroni_raw" );
+    REQUIRE_FALSE( item::count_by_charges( mac_type ) );
+
+    crafting_requirement_index index;
+    for( const int profile : { recipe_filter_none,
+                               recipe_filter_rotten_forbidden
+                             } ) {
+        crafting_requirement_plan plan;
+        plan.alternatives.push_back( { make_group( group_kind::component,
+                                        { make_option( "macaroni_raw", 2 ) } ) } );
+        CHECK( index.add_recipe( rid( profile == recipe_filter_none
+                                      ? "macaroni_plain"
+                                      : "macaroni_no_rotten" ),
+                                 plan, uniform_profiles( profile ) ) );
+    }
+    index.finalize();
+
+    inventory inv;
+    inv.add_item( item( mac_type ) );
+    item rotten_mac( mac_type );
+    rotten_mac.set_rot( rotten_mac.get_shelf_life() + 1_hours );
+    REQUIRE( rotten_mac.rotten() );
+    inv.add_item( rotten_mac );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    CHECK( snap.count_for( make_key( "macaroni_raw" ) ) == 2 );
+    CHECK( snap.count_for( make_key( "macaroni_raw", fact_kind::component_units, 0,
+                                     recipe_filter_rotten_forbidden ) ) == 1 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_full_magazine_profile", "[crafting][requirement_index]" )
+{
+    const itype_id battery_type( "medium_battery_cell" );
+    ammotype battery_ammo( "battery" );
+    item battery( battery_type );
+    const int capacity = battery.ammo_capacity( battery_ammo );
+    REQUIRE( capacity > 1 );
+
+    crafting_requirement_index index;
+    for( const int profile : { recipe_filter_none,
+                               recipe_filter_full_magazine_required
+                             } ) {
+        crafting_requirement_plan plan;
+        plan.alternatives.push_back( { make_group( group_kind::component,
+                                        { make_option( "medium_battery_cell", 2 ) } ) } );
+        CHECK( index.add_recipe( rid( profile == recipe_filter_none
+                                      ? "battery_plain"
+                                      : "battery_full_mag" ),
+                                 plan, uniform_profiles( profile ) ) );
+    }
+    index.finalize();
+
+    inventory inv;
+    item full( battery_type );
+    full.ammo_set( full.ammo_default(), capacity );
+    inv.add_item( full );
+    item half( battery_type );
+    half.ammo_set( half.ammo_default(), capacity / 2 );
+    inv.add_item( half );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    CHECK( snap.count_for( make_key( "medium_battery_cell" ) ) == 2 );
+    CHECK( snap.count_for( make_key( "medium_battery_cell", fact_kind::component_units, 0,
+                                     recipe_filter_full_magazine_required ) ) == 1 );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_ups_tool_charges_is_inexact_and_unsupported", "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::tool,
+                                    { make_option( "soldering_iron", 25,
+                                      fact_kind::tool_charges ) } ) } );
+    CHECK( index.add_recipe( rid( "ups_solder_recipe" ), plan,
+                             uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    inventory inv;
+    item tool( itype_id( "soldering_iron" ) );
+    tool.set_flag( flag_USE_UPS );
+    inv.add_item( tool );
+
+    const crafting_inventory_snapshot snap( index, inv );
+    const crafting_requirement_fact_key solder = make_key( "soldering_iron",
+            fact_kind::tool_charges );
+    CHECK_FALSE( snap.is_exact( solder ) );
+    CHECK( snap.inexact_fact_count() == 1 );
+    CHECK( snap.unsupported_fact_count() == 1 );
 }

@@ -2,6 +2,228 @@
 
 #include <algorithm>
 
+#include "flag.h"
+#include "inventory.h"
+#include "item.h"
+#include "itype.h"
+
+crafting_inventory_snapshot::crafting_inventory_snapshot(
+    const crafting_requirement_index &index, const inventory &inv )
+{
+    // The index allowlist: only these facts are ever counted. Group item
+    // and tool facts by itype id; quality facts are grouped separately by
+    // quality id and matched per level.
+    const std::vector<crafting_requirement_fact_key> keys = index.fact_keys();
+    fact_total_ = keys.size();
+
+    std::map<std::string, std::vector<crafting_requirement_fact_key>> item_facts;
+    std::map<std::string, std::vector<crafting_requirement_fact_key>> quality_facts;
+    for( const crafting_requirement_fact_key &key : keys ) {
+        switch( key.kind ) {
+            case crafting_requirement_fact_kind::component_units:
+            case crafting_requirement_fact_kind::component_charges:
+            case crafting_requirement_fact_kind::tool_instances:
+            case crafting_requirement_fact_kind::tool_charges:
+                item_facts[key.id].push_back( key );
+                break;
+            case crafting_requirement_fact_kind::quality_providers:
+                quality_facts[key.id].push_back( key );
+                break;
+        }
+    }
+    // Quality facts cannot be reproduced exactly: item::get_quality()
+    // mirrors charged/contained quality resolution only in limited cases
+    // and the menu path can couple on player state. Retain a capped count.
+    for( const auto &entry : quality_facts ) {
+        for( const crafting_requirement_fact_key &key : entry.second ) {
+            inexact_keys_.insert( key );
+        }
+    }
+
+    // Eligibility under one filter profile bitmask. Broken items are
+    // rejected for all item/tool facts, matching legacy amount_of /
+    // charges_of. Per-item property checks run once and produce a compact
+    // rejection bitmask; a fact is eligible iff its profile avoids every
+    // rejected bit. Non-magazines are never rejected by the full-magazine
+    // rule.
+    auto rejection_mask_for = [&]( const item & it ) {
+        int mask = 0;
+        if( it.rotten() ) {
+            mask |= recipe_filter_rotten_forbidden;
+        }
+        if( it.is_favorite ) {
+            mask |= recipe_filter_favorite_forbidden;
+        }
+        if( it.has_flag( flag_FROZEN ) && !it.has_flag( flag_EDIBLE_FROZEN ) ) {
+            mask |= recipe_filter_frozen_forbidden;
+        }
+        if( it.is_magazine() ) {
+            if( !it.has_ammo_data() || !it.ammo_data()->ammo ) {
+                mask |= recipe_filter_full_magazine_required;
+            } else if( it.ammo_remaining() <= 0 ||
+                       it.ammo_remaining() < it.ammo_capacity( it.ammo_data()->ammo->type ) ) {
+                mask |= recipe_filter_full_magazine_required;
+            }
+        }
+        return mask;
+    };
+
+    inv.visit_items( [&]( item * e, item * ) {
+        const item &it = *e;
+        if( it.is_broken() ) {
+            // Broken items match nothing item- or tool-related.
+            return VisitResponse::NEXT;
+        }
+        const itype_id id = it.typeId();
+        const bool pseudo = it.has_flag( flag_PSEUDO );
+        const bool by_charges = it.count_by_charges();
+
+        // Overflow-safe capped addition; once a fact reaches its index
+        // maximum it is recorded as saturated and stops updating.
+        auto capped_add = [&]( const crafting_requirement_fact_key & key,
+        int amount, int maximum ) {
+            int &count = counts_[key];
+            if( amount > 0 && count < maximum ) {
+                count += std::min( amount, maximum - count );
+            }
+            if( count >= maximum ) {
+                saturated_keys_.insert( key );
+            }
+        };
+
+        const int rejection_mask = rejection_mask_for( it );
+
+        auto itf = item_facts.find( id.str() );
+        if( itf != item_facts.end() ) {
+            for( const crafting_requirement_fact_key &key : itf->second ) {
+                if( saturated_keys_.count( key ) ) {
+                    continue;
+                }
+                if( key.filter_profile & rejection_mask ) {
+                    continue;
+                }
+                const int maximum = index.maximum_for( key );
+                switch( key.kind ) {
+                    case crafting_requirement_fact_kind::component_units:
+                        // Components exclude pseudo items (legacy
+                        // amount_of(..., pseudo = false)).
+                        if( !pseudo ) {
+                            capped_add( key, 1, maximum );
+                        }
+                        break;
+                    case crafting_requirement_fact_kind::tool_instances:
+                        // Tool instance facts include pseudo items, as
+                        // legacy amount_of(..., pseudo = true) does.
+                        capped_add( key, 1, maximum );
+                        break;
+                    case crafting_requirement_fact_kind::component_charges:
+                        // Pseudo excluded like component units; only
+                        // count-by-charges items contribute their charges.
+                        if( !pseudo && by_charges ) {
+                            capped_add( key, it.charges, maximum );
+                        }
+                        break;
+                    case crafting_requirement_fact_kind::tool_charges: {
+                        // Local exact charges only: no linked, UPS, or
+                        // bionic pools are consulted. Tools whose legacy
+                        // count drains external pools (UPS, bionic power,
+                        // multimag firing requirements) are marked so
+                        // Phase 3 can return unknown for them.
+                        if( by_charges ) {
+                            capped_add( key, it.charges, maximum );
+                        } else {
+                            capped_add( key, it.ammo_remaining(), maximum );
+                            if( it.has_flag( flag_USE_UPS ) ||
+                                it.has_flag( flag_USES_BIONIC_POWER ) ||
+                                it.uses_firing_requirements() ) {
+                                inexact_keys_.insert( key );
+                                unsupported_keys_.insert( key );
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+
+        if( !quality_facts.empty() ) {
+            for( const auto &entry : quality_facts ) {
+                const quality_id qual( entry.first );
+                const int supplied = it.get_quality( qual );
+                if( supplied <= 0 ) {
+                    continue;
+                }
+                for( const crafting_requirement_fact_key &key : entry.second ) {
+                    if( saturated_keys_.count( key ) ) {
+                        continue;
+                    }
+                    if( key.level <= supplied ) {
+                        capped_add( key, it.count(), index.maximum_for( key ) );
+                    }
+                }
+            }
+        }
+        return VisitResponse::NEXT;
+    } );
+}
+
+int crafting_inventory_snapshot::count_for(
+    const crafting_requirement_fact_key &key ) const
+{
+    auto it = counts_.find( key );
+    return it == counts_.end() ? 0 : it->second;
+}
+
+bool crafting_inventory_snapshot::meets(
+    const crafting_requirement_fact_key &key, int threshold ) const
+{
+    if( threshold <= 0 ) {
+        return false;
+    }
+    return count_for( key ) >= threshold;
+}
+
+std::size_t crafting_inventory_snapshot::fact_count() const
+{
+    return fact_total_;
+}
+
+std::size_t crafting_inventory_snapshot::saturated_fact_count() const
+{
+    return saturated_keys_.size();
+}
+
+bool crafting_inventory_snapshot::is_exact(
+    const crafting_requirement_fact_key &key ) const
+{
+    return inexact_keys_.count( key ) == 0;
+}
+
+std::size_t crafting_inventory_snapshot::inexact_fact_count() const
+{
+    return inexact_keys_.size();
+}
+
+std::size_t crafting_inventory_snapshot::unsupported_fact_count() const
+{
+    return unsupported_keys_.size();
+}
+
+std::size_t crafting_inventory_snapshot::approximate_memory_bytes() const
+{
+    return sizeof( *this ) +
+           counts_.size() * ( sizeof( crafting_requirement_fact_key ) + sizeof( int ) +
+                              sizeof( void * ) * 2 ) +
+           inexact_keys_.size() * ( sizeof( crafting_requirement_fact_key ) +
+                                    sizeof( void * ) * 2 ) +
+           unsupported_keys_.size() * ( sizeof( crafting_requirement_fact_key ) +
+                                        sizeof( void * ) * 2 ) +
+           saturated_keys_.size() * ( sizeof( crafting_requirement_fact_key ) +
+                                      sizeof( void * ) * 2 );
+}
+
 bool crafting_requirement_fact_key::operator==(
     const crafting_requirement_fact_key &rhs ) const
 {
