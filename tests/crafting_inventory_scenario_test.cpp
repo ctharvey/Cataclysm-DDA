@@ -43,6 +43,7 @@ static const itype_id itype_stick( "stick" );
 static const recipe_id recipe_cudgel_test_no_tools( "cudgel_test_no_tools" );
 static const recipe_id recipe_test_tallow( "test_tallow" );
 
+static const skill_id skill_cooking( "cooking" );
 static const skill_id skill_fabrication( "fabrication" );
 static const skill_id skill_melee( "melee" );
 
@@ -105,6 +106,19 @@ const std::array<const char *, matrix_menu_count> matrix_menu_names = { {
         "normal", "no_rotten", "no_favorite"
     }
 };
+
+constexpr std::array<int, 4> volume_item_counts = { { 0, 1, 25, 10000 } };
+constexpr std::array<int, 5> benchmark_item_counts = { { 0, 1, 25, 10000, 100000 } };
+constexpr int extreme_item_count = 100000;
+
+inventory make_board_inventory( int count )
+{
+    inventory inv;
+    for( int i = 0; i < count; ++i ) {
+        inv.add_item( item( itype_2x4 ) );
+    }
+    return inv;
+}
 
 void add_sticks( inventory &inv, int count, bool favorite = false, bool broken = false )
 {
@@ -432,6 +446,91 @@ TEST_CASE( "crafting_inventory_scenario_matrix", "[crafting][inventory_matrix]" 
     }
 }
 
+// Exercise the same exact recipe from an empty inventory through 10,000
+// concrete items in the routine suite.  The snapshot must scan the source
+// inventory while retaining only the recipe-derived capped count; the
+// 100,000-item stress case remains explicit below.
+TEST_CASE( "crafting_inventory_scenario_volume_matrix",
+           "[crafting][inventory_matrix][inventory_volume]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const recipe &cudgel = recipe_cudgel_test_no_tools.obj();
+    crafting_requirement_fact_key board;
+    board.kind = fact_kind::component_units;
+    board.id = "2x4";
+    const int maximum = index.maximum_for( board );
+    REQUIRE( maximum > 0 );
+
+    for( int item_count : volume_item_counts ) {
+        DYNAMIC_SECTION( item_count << " concrete 2x4 items" ) {
+            const inventory inv = make_board_inventory( item_count );
+            const crafting_inventory_snapshot snapshot( index, inv );
+            const crafting_requirement_result_cache cache( index, snapshot );
+            const crafting_requirement_evaluator evaluator( index, snapshot );
+            const int expected_count = item_count < maximum ? item_count : maximum;
+            const crafting_requirement_result expected_result = item_count == 0 ?
+                    crafting_requirement_result::unsatisfied :
+                    crafting_requirement_result::satisfied;
+
+            INFO( "source item count: " << item_count );
+            INFO( "2x4 ceiling: " << maximum );
+            INFO( "stored 2x4 count: " << snapshot.count_for( board ) );
+            CHECK( snapshot.count_for( board ) == expected_count );
+            CHECK( snapshot.meets( board, 1 ) == ( item_count > 0 ) );
+            if( item_count >= maximum ) {
+                CHECK( snapshot.count_for( board ) == maximum );
+            }
+
+            for( menu_mode menu : matrix_menus ) {
+                CAPTURE( menu );
+                CHECK( evaluator.evaluate( cudgel.ident(), menu ) == expected_result );
+                CHECK( cache.evaluate( cudgel.ident(), menu ) == expected_result );
+            }
+
+            const bool legacy = cudgel.deduped_requirements().can_make_with_inventory(
+                                    nullptr, inv,
+                                    cudgel.get_component_filter( recipe_filter_flags::none ),
+                                    1, craft_flags::none );
+            CHECK( legacy == ( item_count > 0 ) );
+        }
+    }
+}
+
+TEST_CASE( "crafting_inventory_scenario_extreme_volume",
+           "[.][inventory_extreme]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const recipe &cudgel = recipe_cudgel_test_no_tools.obj();
+    crafting_requirement_fact_key board;
+    board.kind = fact_kind::component_units;
+    board.id = "2x4";
+    const int maximum = index.maximum_for( board );
+    REQUIRE( maximum > 0 );
+
+    const inventory inv = make_board_inventory( extreme_item_count );
+    const crafting_inventory_snapshot snapshot( index, inv );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    const crafting_requirement_evaluator evaluator( index, snapshot );
+    INFO( "source item count: " << extreme_item_count );
+    INFO( "2x4 ceiling: " << maximum );
+    CHECK( snapshot.count_for( board ) == maximum );
+    CHECK( snapshot.meets( board, 1 ) );
+    CHECK( snapshot.saturated_fact_count() > 0 );
+
+    for( menu_mode menu : matrix_menus ) {
+        CAPTURE( menu );
+        CHECK( evaluator.evaluate( cudgel.ident(), menu ) ==
+               crafting_requirement_result::satisfied );
+        CHECK( cache.evaluate( cudgel.ident(), menu ) ==
+               crafting_requirement_result::satisfied );
+    }
+
+    CHECK( cudgel.deduped_requirements().can_make_with_inventory(
+               nullptr, inv,
+               cudgel.get_component_filter( recipe_filter_flags::none ),
+               1, craft_flags::none ) );
+}
+
 // Deterministic compact report over the same scenario table; hidden by
 // default, run explicitly with the [inventory_matrix_report] tag. Prints
 // per-menu outcome counts only; no timing, no wall-clock values.
@@ -578,6 +677,58 @@ TEST_CASE( "crafting_inventory_scenario_menu_availability",
         CHECK( legacy.color() == c_white );
     }
 
+    SECTION( "adjacent map component among clutter" ) {
+        Character &guy = setup_matrix_character();
+        guy.set_skill_level( skill_fabrication, 2 );
+        guy.set_skill_level( skill_melee, 1 );
+        map &here = get_map();
+        const tripoint_bub_ms adjacent = guy.pos_bub() + tripoint::east;
+        for( int i = 0; i < 25; ++i ) {
+            here.add_item_or_charges( guy.pos_bub(), item( itype_stick ) );
+        }
+        here.add_item_or_charges( adjacent, item( itype_2x4 ) );
+        guy.invalidate_crafting_inventory();
+
+        const crafting_requirement_index &index = recipe_dict.requirement_index();
+        const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+        const crafting_requirement_result_cache cache( index, snapshot );
+        const availability legacy( guy, &cudgel );
+        const availability cached( guy, &cudgel, 1, false, nullptr, &cache );
+        INFO( "scenario: adjacent map component among clutter" );
+        INFO( "inventory: 25 sticks on the avatar tile and one 2x4 one tile east" );
+        CHECK( cache.evaluate( cudgel.ident(), menu_mode::normal ) ==
+               crafting_requirement_result::satisfied );
+        CHECK( legacy.can_craft_recipe );
+        CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+        CHECK( cached.color() == legacy.color() );
+    }
+
+    SECTION( "split carried and map requirements" ) {
+        Character &guy = setup_matrix_character();
+        guy.set_skill_level( skill_cooking, 3 );
+        guy.i_add( item( itype_fat ) );
+        guy.i_add( item( itype_fat ) );
+        get_map().add_item_or_charges( guy.pos_bub() + tripoint::east,
+                                       item( itype_knife_hunting ) );
+        guy.invalidate_crafting_inventory();
+
+        const recipe &tallow = recipe_test_tallow.obj();
+        const crafting_requirement_index &index = recipe_dict.requirement_index();
+        const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+        const crafting_requirement_result_cache cache( index, snapshot );
+        const availability legacy( guy, &tallow );
+        const availability cached( guy, &tallow, 1, false, nullptr, &cache );
+        INFO( "scenario: split carried and map requirements" );
+        INFO( "inventory: two carried fat and a hunting knife one tile east" );
+        CHECK( cache.evaluate( tallow.ident(), menu_mode::normal ) ==
+               crafting_requirement_result::unknown );
+        CHECK( legacy.can_craft_recipe );
+        CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+        CHECK( cached.has_all_skills == legacy.has_all_skills );
+        CHECK( cached.color() == legacy.color() );
+        CHECK( legacy.color() == c_white );
+    }
+
     // Favorite filtering: a single favorite 2x4 satisfies the normal menu
     // but the cache knows the no-favorite menu would reject it.
     SECTION( "favorite component" ) {
@@ -638,6 +789,102 @@ TEST_CASE( "crafting_inventory_scenario_menu_availability",
         INFO( "menu can_craft_recipe: " << avail.can_craft_recipe );
         CHECK_FALSE( avail.can_craft_recipe );
         CHECK( avail.color() == c_dark_gray );
+    }
+}
+
+TEST_CASE( "crafting_inventory_scenario_cudgel_skill_matrix",
+           "[crafting][inventory_matrix][skill_matrix]" )
+{
+    struct skill_case {
+        int fabrication;
+        int melee;
+        bool primary_skill;
+        bool all_skills;
+        nc_color color;
+    };
+    const std::array<skill_case, 5> cases = { {
+            { 0, 0, false, false, c_light_red },
+            { 1, 1, true, false, c_yellow },
+            { 2, 0, true, false, c_yellow },
+            { 2, 1, true, true, c_white },
+            { 10, 10, true, true, c_white }
+        }
+    };
+    const recipe &cudgel = recipe_cudgel_test_no_tools.obj();
+
+    for( const skill_case &sc : cases ) {
+        DYNAMIC_SECTION( "fabrication " << sc.fabrication << ", melee " << sc.melee ) {
+            Character &guy = setup_matrix_character();
+            guy.set_skill_level( skill_fabrication, sc.fabrication );
+            guy.set_skill_level( skill_melee, sc.melee );
+            guy.i_add( item( itype_2x4 ) );
+            guy.invalidate_crafting_inventory();
+
+            const crafting_requirement_index &index = recipe_dict.requirement_index();
+            const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+            const crafting_requirement_result_cache cache( index, snapshot );
+            const availability legacy( guy, &cudgel );
+            const availability cached( guy, &cudgel, 1, false, nullptr, &cache );
+            INFO( "inventory: one carried 2x4" );
+            CHECK( cache.evaluate( cudgel.ident(), menu_mode::normal ) ==
+                   crafting_requirement_result::satisfied );
+            CHECK( legacy.can_craft_recipe );
+            CHECK( legacy.crafter_has_primary_skill == sc.primary_skill );
+            CHECK( legacy.has_all_skills == sc.all_skills );
+            CHECK( legacy.color() == sc.color );
+            CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+            CHECK( cached.crafter_has_primary_skill == legacy.crafter_has_primary_skill );
+            CHECK( cached.has_all_skills == legacy.has_all_skills );
+            CHECK( cached.color() == legacy.color() );
+        }
+    }
+}
+
+TEST_CASE( "crafting_inventory_scenario_tallow_skill_matrix",
+           "[crafting][inventory_matrix][skill_matrix]" )
+{
+    struct skill_case {
+        int cooking;
+        bool primary_skill;
+        bool all_skills;
+        nc_color color;
+    };
+    const std::array<skill_case, 5> cases = { {
+            { 0, false, false, c_light_red },
+            { 1, false, false, c_light_red },
+            { 2, true, false, c_yellow },
+            { 3, true, true, c_white },
+            { 10, true, true, c_white }
+        }
+    };
+    const recipe &tallow = recipe_test_tallow.obj();
+
+    for( const skill_case &sc : cases ) {
+        DYNAMIC_SECTION( "cooking " << sc.cooking ) {
+            Character &guy = setup_matrix_character();
+            guy.set_skill_level( skill_cooking, sc.cooking );
+            guy.i_add( item( itype_fat ) );
+            guy.i_add( item( itype_fat ) );
+            guy.i_add( item( itype_knife_hunting ) );
+            guy.invalidate_crafting_inventory();
+
+            const crafting_requirement_index &index = recipe_dict.requirement_index();
+            const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+            const crafting_requirement_result_cache cache( index, snapshot );
+            const availability legacy( guy, &tallow );
+            const availability cached( guy, &tallow, 1, false, nullptr, &cache );
+            INFO( "inventory: two carried fat and one hunting knife" );
+            CHECK( cache.evaluate( tallow.ident(), menu_mode::normal ) ==
+                   crafting_requirement_result::unknown );
+            CHECK( legacy.can_craft_recipe );
+            CHECK( legacy.crafter_has_primary_skill == sc.primary_skill );
+            CHECK( legacy.has_all_skills == sc.all_skills );
+            CHECK( legacy.color() == sc.color );
+            CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
+            CHECK( cached.crafter_has_primary_skill == legacy.crafter_has_primary_skill );
+            CHECK( cached.has_all_skills == legacy.has_all_skills );
+            CHECK( cached.color() == legacy.color() );
+        }
     }
 }
 
@@ -874,5 +1121,38 @@ TEST_CASE( "crafting_inventory_scenario_snapshot_semantics",
         CHECK( snap.meets( stick, 2 ) );
         CHECK( snap.count_for( stick_charges ) == 0 );
         CHECK_FALSE( snap.meets( stick_charges, 2 ) );
+    }
+}
+
+// Hidden wall-clock benchmark.  It deliberately has no timing assertion:
+// machines and CI workers vary, while the reported samples remain useful for
+// comparing branches and inventory scales with the same command.
+TEST_CASE( "crafting_inventory_scenario_volume_benchmark",
+           "[.][inventory_matrix_benchmark][benchmark]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const recipe_id target_recipe = recipe_cudgel_test_no_tools;
+
+    for( int item_count : benchmark_item_counts ) {
+        DYNAMIC_SECTION( item_count << " concrete inventory items" ) {
+            const inventory inv = make_board_inventory( item_count );
+            const crafting_inventory_snapshot prepared_snapshot( index, inv );
+
+            BENCHMARK( "snapshot construction" ) {
+                const crafting_inventory_snapshot snapshot( index, inv );
+                return snapshot.saturated_fact_count();
+            };
+
+            BENCHMARK( "result-cache construction from prepared snapshot" ) {
+                const crafting_requirement_result_cache cache( index, prepared_snapshot );
+                return cache.evaluate( target_recipe, menu_mode::normal );
+            };
+
+            BENCHMARK( "snapshot plus result-cache construction" ) {
+                const crafting_inventory_snapshot snapshot( index, inv );
+                const crafting_requirement_result_cache cache( index, snapshot );
+                return cache.evaluate( target_recipe, menu_mode::normal );
+            };
+        }
     }
 }
