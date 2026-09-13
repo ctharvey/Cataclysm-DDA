@@ -112,7 +112,7 @@ TEST_CASE( "crafting_requirement_index_threshold_validation", "[crafting]" )
 
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                  { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     // A plan with zero alternatives is malformed for a supported recipe.
     std::string err;
@@ -127,7 +127,7 @@ TEST_CASE( "crafting_requirement_index_threshold_validation", "[crafting]" )
     // Mutations after finalization are rejected.
     crafting_requirement_plan more;
     more.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "iron", 7 ) } ) } );
+        { make_option( "iron", 7 ) } ) } );
     CHECK_FALSE( index.add_recipe( rid( "r3" ), more,
                                    uniform_profiles( recipe_filter_none ), &err ) );
     CHECK_FALSE( index.add_unsupported_recipe( rid( "r4" ), "reason", &err ) );
@@ -142,12 +142,13 @@ TEST_CASE( "crafting_requirement_index_finalize_sorts_and_deduplicates", "[craft
     // Two recipes sharing one fact key, with a duplicated threshold.
     crafting_requirement_plan first;
     first.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "steel", 10 ) } ) } );
+        { make_option( "steel", 10 ) } ) } );
     crafting_requirement_plan second;
     second.alternatives.push_back( { make_group( group_kind::component,
-                                      { make_option( "steel", 10 ),
-                                        make_option( "steel", 2 )
-                                      } ) } );
+        {
+            make_option( "steel", 10 ),
+            make_option( "steel", 2 )
+        } ) } );
     CHECK( index.add_recipe( rid( "r1" ), first, uniform_profiles( recipe_filter_none ) ) );
     CHECK( index.add_recipe( rid( "r2" ), second, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -170,11 +171,11 @@ TEST_CASE( "crafting_requirement_index_plan_and_or_shape", "[crafting]" )
         make_group( group_kind::component, { make_option( "steel", 2 ) } ) );
     plan.alternatives.back().push_back(
         make_group( group_kind::tool,
-        { make_option( "hammer", 1, fact_kind::tool_instances ) } ) );
+    { make_option( "hammer", 1, fact_kind::tool_instances ) } ) );
     plan.alternatives.emplace_back();
     plan.alternatives.back().push_back(
         make_group( group_kind::component,
-        { make_option( "steel", 5 ), make_option( "iron", 3 ) } ) );
+    { make_option( "steel", 5 ), make_option( "iron", 3 ) } ) );
     CHECK( index.add_recipe( rid( "or_recipe" ), plan,
                              uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -200,7 +201,7 @@ TEST_CASE( "crafting_requirement_index_effective_profiles_split_facts", "[crafti
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "meat", 4 ) } ) } );
+        { make_option( "meat", 4 ) } ) } );
     // Distinct effective profile per menu mode.
     const profiles_array profiles = make_profiles(
                                         recipe_filter_none,
@@ -217,8 +218,10 @@ TEST_CASE( "crafting_requirement_index_effective_profiles_split_facts", "[crafti
             fact_kind::component_units, 0, recipe_filter_rotten_forbidden );
     const crafting_requirement_fact_key no_favorite = make_key( "meat",
             fact_kind::component_units, 0, recipe_filter_favorite_forbidden );
-    for( const crafting_requirement_fact_key &key : { normal, no_rotten,
-        no_favorite } ) {
+    for( const crafting_requirement_fact_key &key : {
+             normal, no_rotten,
+             no_favorite
+         } ) {
         CHECK( index.thresholds_for( key ) == std::vector<int> { 4 } );
         CHECK( index.maximum_for( key ) == 4 );
         REQUIRE( index.edges_for( key ).size() == 1 );
@@ -248,7 +251,7 @@ TEST_CASE( "crafting_requirement_index_frozen_magazine_rules_do_not_share_facts"
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 3 ) } ) } );
+        { make_option( "steel", 3 ) } ) } );
     const int frozen = recipe_filter_frozen_forbidden;
     const int magazine = recipe_filter_full_magazine_required;
     // Both recipes use the normal menu mode but differ in extra rules.
@@ -287,7 +290,7 @@ TEST_CASE( "crafting_requirement_index_equal_profiles_dedup_facts_keep_edges", "
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 6 ) } ) } );
+        { make_option( "steel", 6 ) } ) } );
     // All three modes share the same effective profile, so all three modes
     // map onto one fact key.
     CHECK( index.add_recipe( rid( "steel_recipe" ), plan, uniform_profiles(
@@ -313,8 +316,10 @@ TEST_CASE( "crafting_requirement_index_quality_shares_unfiltered_fact", "[crafti
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::quality,
-                                    { make_option( "CUT", 2,
-                                      fact_kind::quality_providers, 1 ) } ) } );
+        {
+            make_option( "CUT", 2,
+                         fact_kind::quality_providers, 1 )
+        } ) } );
     // Even with nonzero effective profiles, quality facts use profile 0.
     CHECK( index.add_recipe( rid( "cut_recipe" ), plan, make_profiles(
                                  recipe_filter_rotten_forbidden,
@@ -342,14 +347,14 @@ TEST_CASE( "crafting_requirement_index_reverse_edge_coordinates", "[crafting]" )
     plan.alternatives.emplace_back();
     plan.alternatives.back().push_back(
         make_group( group_kind::component,
-        { make_option( "steel", 2 ), make_option( "iron", 3 ) } ) );
+    { make_option( "steel", 2 ), make_option( "iron", 3 ) } ) );
     plan.alternatives.back().push_back(
         make_group( group_kind::tool,
-        { make_option( "hammer", 1, fact_kind::tool_charges ) } ) );
+    { make_option( "hammer", 1, fact_kind::tool_charges ) } ) );
     plan.alternatives.emplace_back();
     plan.alternatives.back().push_back(
         make_group( group_kind::quality,
-        { make_option( "CUT", 2, fact_kind::quality_providers, 1 ) } ) );
+    { make_option( "CUT", 2, fact_kind::quality_providers, 1 ) } ) );
     const recipe_id recipe = rid( "complex_recipe" );
     CHECK( index.add_recipe( recipe, plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -458,12 +463,12 @@ TEST_CASE( "crafting_requirement_index_malformed_plan_atomic_rejection", "[craft
     // Pre-existing valid state that must survive every rejection untouched.
     crafting_requirement_plan good;
     good.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "good_recipe" ), good,
                              uniform_profiles( recipe_filter_none ) ) );
     const std::size_t before_count = index.recipe_count();
 
-    auto rejection_leaves_index_intact = [&]( const crafting_requirement_plan &bad,
+    auto rejection_leaves_index_intact = [&]( const crafting_requirement_plan & bad,
     const char *label ) {
         INFO( label );
         std::string err;
@@ -488,20 +493,20 @@ TEST_CASE( "crafting_requirement_index_malformed_plan_atomic_rejection", "[craft
     // (valid) alternatives may be committed.
     crafting_requirement_plan bad_threshold;
     bad_threshold.alternatives.push_back( { make_group( group_kind::component,
-                                            { make_option( "extra", 3 ) } ) } );
+        { make_option( "extra", 3 ) } ) } );
     bad_threshold.alternatives.push_back( { make_group( group_kind::component,
-                                           { make_option( "extra", 0 ) } ) } );
+        { make_option( "extra", 0 ) } ) } );
     rejection_leaves_index_intact( bad_threshold, "nonpositive threshold" );
 
     crafting_requirement_plan bad_negative;
     bad_negative.alternatives.push_back( { make_group( group_kind::component,
-                                           { make_option( "extra", -4 ) } ) } );
+        { make_option( "extra", -4 ) } ) } );
     rejection_leaves_index_intact( bad_negative, "negative threshold" );
 
     // Option kind does not match its group kind.
     crafting_requirement_plan bad_kind;
     bad_kind.alternatives.push_back( { make_group( group_kind::tool,
-                                       { make_option( "steel", 2 ) } ) } );
+        { make_option( "steel", 2 ) } ) } );
     rejection_leaves_index_intact( bad_kind, "mismatched group kind" );
 
     // Group with no options remains invalid.
@@ -513,7 +518,7 @@ TEST_CASE( "crafting_requirement_index_malformed_plan_atomic_rejection", "[craft
     CHECK( index.add_unsupported_recipe( rid( "dup_recipe" ), "just because" ) );
     crafting_requirement_plan dup;
     dup.alternatives.push_back( { make_group( group_kind::component,
-                                   { make_option( "extra", 1 ) } ) } );
+        { make_option( "extra", 1 ) } ) } );
     std::string err;
     CHECK_FALSE( index.add_recipe( rid( "dup_recipe" ), dup,
                                    uniform_profiles( recipe_filter_none ), &err ) );
@@ -529,10 +534,11 @@ TEST_CASE( "crafting_requirement_index_edges_sorted_and_deduplicated", "[craftin
     // One recipe registers multiple steel thresholds under one profile.
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 9 ),
-                                      make_option( "steel", 2 ),
-                                      make_option( "steel", 5 )
-                                    } ) } );
+        {
+            make_option( "steel", 9 ),
+            make_option( "steel", 2 ),
+            make_option( "steel", 5 )
+        } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -571,11 +577,11 @@ TEST_CASE( "crafting_requirement_index_retained_plan_preserves_and_or_shape", "[
         make_group( group_kind::component, { make_option( "steel", 2 ) } ) );
     plan.alternatives.back().push_back(
         make_group( group_kind::tool,
-        { make_option( "hammer", 1, fact_kind::tool_instances ) } ) );
+    { make_option( "hammer", 1, fact_kind::tool_instances ) } ) );
     plan.alternatives.emplace_back();
     plan.alternatives.back().push_back(
         make_group( group_kind::component,
-        { make_option( "steel", 5 ), make_option( "iron", 3 ) } ) );
+    { make_option( "steel", 5 ), make_option( "iron", 3 ) } ) );
     const recipe_id recipe = rid( "shape_recipe" );
     CHECK( index.add_recipe( recipe, plan, uniform_profiles( recipe_filter_none ) ) );
 
@@ -619,10 +625,10 @@ TEST_CASE( "crafting_requirement_index_reverse_edge_recipe_ids_are_recipe_ids", 
     crafting_requirement_index index;
     crafting_requirement_plan first;
     first.alternatives.push_back( { make_group( group_kind::component,
-                                      { make_option( "steel", 2 ) } ) } );
+        { make_option( "steel", 2 ) } ) } );
     crafting_requirement_plan second;
     second.alternatives.push_back( { make_group( group_kind::component,
-                                       { make_option( "steel", 7 ) } ) } );
+        { make_option( "steel", 7 ) } ) } );
     const recipe_id recipe_a = rid( "recipe_alpha" );
     const recipe_id recipe_b = rid( "recipe_beta" );
     CHECK( index.add_recipe( recipe_a, first, uniform_profiles( recipe_filter_none ) ) );
@@ -652,7 +658,7 @@ TEST_CASE( "crafting_requirement_index_clear_and_rebuild", "[crafting]" )
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
     CHECK( index.is_finalized() );
@@ -674,7 +680,7 @@ TEST_CASE( "crafting_requirement_index_clear_and_rebuild", "[crafting]" )
     // The index can be rebuilt from scratch after clear().
     crafting_requirement_plan rebuilt;
     rebuilt.alternatives.push_back( { make_group( group_kind::component,
-                                       { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), rebuilt, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
     CHECK( index.is_finalized() );
@@ -688,7 +694,7 @@ TEST_CASE( "crafting_requirement_index_missing_facts", "[crafting]" )
 
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 4 ) } ) } );
+        { make_option( "steel", 4 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -703,10 +709,11 @@ TEST_CASE( "crafting_requirement_tally_incremental_crossing", "[crafting]" )
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 3 ),
-                                      make_option( "steel", 6 ),
-                                      make_option( "steel", 9 )
-                                    } ) } );
+        {
+            make_option( "steel", 3 ),
+            make_option( "steel", 6 ),
+            make_option( "steel", 9 )
+        } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -734,10 +741,11 @@ TEST_CASE( "crafting_requirement_tally_single_add_crosses_multiple_thresholds", 
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 9 ),
-                                      make_option( "steel", 2 ),
-                                      make_option( "steel", 5 )
-                                    } ) } );
+        {
+            make_option( "steel", 9 ),
+            make_option( "steel", 2 ),
+            make_option( "steel", 5 )
+        } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -755,7 +763,7 @@ TEST_CASE( "crafting_requirement_tally_no_duplicate_crossings", "[crafting]" )
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -772,7 +780,7 @@ TEST_CASE( "crafting_requirement_tally_saturates_at_maximum", "[crafting]" )
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 4 ) } ) } );
+        { make_option( "steel", 4 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -794,7 +802,7 @@ TEST_CASE( "crafting_requirement_tally_ignores_nonpositive_and_unknown", "[craft
     const crafting_requirement_fact_key unknown = make_key( "unobtainium" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -814,7 +822,7 @@ TEST_CASE( "crafting_requirement_tally_meets_requires_positive_threshold", "[cra
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", 5 ) } ) } );
+        { make_option( "steel", 5 ) } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -832,9 +840,10 @@ TEST_CASE( "crafting_requirement_tally_overflow_safe_near_int_max", "[crafting]"
     const crafting_requirement_fact_key steel = make_key( "steel" );
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "steel", INT_MAX / 2 ),
-                                      make_option( "steel", INT_MAX )
-                                    } ) } );
+        {
+            make_option( "steel", INT_MAX / 2 ),
+            make_option( "steel", INT_MAX )
+        } ) } );
     CHECK( index.add_recipe( rid( "r1" ), plan, uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
 
@@ -931,7 +940,7 @@ TEST_CASE( "requirement_index_loaded_dictionary_one_explicit_record_per_recipe",
                         // stored-plan coordinates.
                         bool found = false;
                         for( const crafting_requirement_edge &edge :
-                            index.edges_for( key ) ) {
+                             index.edges_for( key ) ) {
                             if( edge.id == id &&
                                 edge.alternative == static_cast<int>( a ) &&
                                 edge.group_kind == grp.kind &&
@@ -1109,7 +1118,7 @@ crafting_requirement_index make_stick_index( int max_units )
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "stick", max_units ) } ) } );
+        { make_option( "stick", max_units ) } ) } );
     CHECK( index.add_recipe( rid( "stick_recipe" ), plan,
                              uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -1216,7 +1225,8 @@ TEST_CASE( "crafting_inventory_snapshot_loaded_index_metrics_report",
 // items, favorite/frozen filter profiles, and quality inexactness.
 // ---------------------------------------------------------------------------
 
-TEST_CASE( "crafting_inventory_snapshot_charge_facts_saturate_at_maximum", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_charge_facts_saturate_at_maximum",
+           "[crafting][requirement_index]" )
 {
     const itype_id rock_type( "rock" );
     REQUIRE( item::count_by_charges( rock_type ) );
@@ -1224,8 +1234,10 @@ TEST_CASE( "crafting_inventory_snapshot_charge_facts_saturate_at_maximum", "[cra
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                    { make_option( "rock", 12,
-                                      fact_kind::component_charges ) } ) } );
+        {
+            make_option( "rock", 12,
+                         fact_kind::component_charges )
+        } ) } );
     CHECK( index.add_recipe( rid( "rock_recipe" ), plan,
                              uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -1254,7 +1266,8 @@ TEST_CASE( "crafting_inventory_snapshot_charge_facts_saturate_at_maximum", "[cra
     CHECK( huge_snap.saturated_fact_count() == 1 );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_pseudo_item_counts_as_tool_not_component", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_pseudo_item_counts_as_tool_not_component",
+           "[crafting][requirement_index]" )
 {
     const itype_id stick_type( "stick" );
     REQUIRE_FALSE( item::count_by_charges( stick_type ) );
@@ -1286,21 +1299,23 @@ TEST_CASE( "crafting_inventory_snapshot_pseudo_item_counts_as_tool_not_component
     CHECK( snap.meets( tool, 1 ) );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_favorite_and_frozen_profiles", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_favorite_and_frozen_profiles",
+           "[crafting][requirement_index]" )
 {
     // Three recipes share the same stick requirement but register facts
     // under distinct effective filter profiles.
     crafting_requirement_index index;
     int profile_index = 0;
-    for( const int profile : { recipe_filter_none,
-                               recipe_filter_favorite_forbidden,
-                               recipe_filter_frozen_forbidden
-                             } ) {
+    for( const int profile : {
+             recipe_filter_none,
+             recipe_filter_favorite_forbidden,
+             recipe_filter_frozen_forbidden
+         } ) {
         crafting_requirement_plan plan;
         plan.alternatives.push_back( { make_group( group_kind::component,
-                                        { make_option( "stick", 2 ) } ) } );
+            { make_option( "stick", 2 ) } ) } );
         CHECK( index.add_recipe( rid( ( "profiled_stick_" +
-                                       std::to_string( profile_index++ ) ).c_str() ),
+                                        std::to_string( profile_index++ ) ).c_str() ),
                                  plan, uniform_profiles( profile ) ) );
     }
     index.finalize();
@@ -1334,13 +1349,16 @@ TEST_CASE( "crafting_inventory_snapshot_favorite_and_frozen_profiles", "[craftin
     CHECK( snap.meets( no_frozen, 1 ) );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_quality_facts_are_inexact", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_quality_facts_are_inexact",
+           "[crafting][requirement_index]" )
 {
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::quality,
-                                    { make_option( "HAMMER", 1,
-                                      fact_kind::quality_providers, 1 ) } ) } );
+        {
+            make_option( "HAMMER", 1,
+                         fact_kind::quality_providers, 1 )
+        } ) } );
     CHECK( index.add_recipe( rid( "hammer_recipe" ), plan,
                              uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -1356,7 +1374,8 @@ TEST_CASE( "crafting_inventory_snapshot_quality_facts_are_inexact", "[crafting][
     CHECK( snap.inexact_fact_count() == 1 );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_broken_items_are_excluded", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_broken_items_are_excluded",
+           "[crafting][requirement_index]" )
 {
     REQUIRE_FALSE( item::count_by_charges( itype_id( "stick" ) ) );
 
@@ -1383,18 +1402,20 @@ TEST_CASE( "crafting_inventory_snapshot_broken_items_are_excluded", "[crafting][
     CHECK( snap.count_for( make_key( "stick", fact_kind::tool_instances ) ) == 0 );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_rotten_profile_rejects_rotten", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_rotten_profile_rejects_rotten",
+           "[crafting][requirement_index]" )
 {
     const itype_id mac_type( "macaroni_raw" );
     REQUIRE_FALSE( item::count_by_charges( mac_type ) );
 
     crafting_requirement_index index;
-    for( const int profile : { recipe_filter_none,
-                               recipe_filter_rotten_forbidden
-                             } ) {
+    for( const int profile : {
+             recipe_filter_none,
+             recipe_filter_rotten_forbidden
+         } ) {
         crafting_requirement_plan plan;
         plan.alternatives.push_back( { make_group( group_kind::component,
-                                        { make_option( "macaroni_raw", 2 ) } ) } );
+            { make_option( "macaroni_raw", 2 ) } ) } );
         CHECK( index.add_recipe( rid( profile == recipe_filter_none
                                       ? "macaroni_plain"
                                       : "macaroni_no_rotten" ),
@@ -1424,12 +1445,13 @@ TEST_CASE( "crafting_inventory_snapshot_full_magazine_profile", "[crafting][requ
     REQUIRE( capacity > 1 );
 
     crafting_requirement_index index;
-    for( const int profile : { recipe_filter_none,
-                               recipe_filter_full_magazine_required
-                             } ) {
+    for( const int profile : {
+             recipe_filter_none,
+             recipe_filter_full_magazine_required
+         } ) {
         crafting_requirement_plan plan;
         plan.alternatives.push_back( { make_group( group_kind::component,
-                                        { make_option( "medium_battery_cell", 2 ) } ) } );
+            { make_option( "medium_battery_cell", 2 ) } ) } );
         CHECK( index.add_recipe( rid( profile == recipe_filter_none
                                       ? "battery_plain"
                                       : "battery_full_mag" ),
@@ -1451,13 +1473,16 @@ TEST_CASE( "crafting_inventory_snapshot_full_magazine_profile", "[crafting][requ
                                      recipe_filter_full_magazine_required ) ) == 1 );
 }
 
-TEST_CASE( "crafting_inventory_snapshot_ups_tool_charges_is_inexact_and_unsupported", "[crafting][requirement_index]" )
+TEST_CASE( "crafting_inventory_snapshot_ups_tool_charges_is_inexact_and_unsupported",
+           "[crafting][requirement_index]" )
 {
     crafting_requirement_index index;
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::tool,
-                                    { make_option( "soldering_iron", 25,
-                                      fact_kind::tool_charges ) } ) } );
+        {
+            make_option( "soldering_iron", 25,
+                         fact_kind::tool_charges )
+        } ) } );
     CHECK( index.add_recipe( rid( "ups_solder_recipe" ), plan,
                              uniform_profiles( recipe_filter_none ) ) );
     index.finalize();
@@ -1491,7 +1516,7 @@ crafting_requirement_result eval_plan( const std::string &name,
                                        const inventory &inv,
                                        menu_mode menu = menu_mode::normal,
                                        const profiles_array &profiles =
-                                           uniform_profiles( recipe_filter_none ),
+                                               uniform_profiles( recipe_filter_none ),
                                        bool finalized = true )
 {
     crafting_requirement_index index;
@@ -1570,9 +1595,9 @@ TEST_CASE( "phase3a_evaluate_alternative_or", "[crafting][requirement_index]" )
     // alt 0: stick >= 10; alt 1: soldering iron >= 1.
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "stick", 10 ) } ) } );
+        { make_option( "stick", 10 ) } ) } );
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "soldering_iron", 1 ) } ) } );
+        { make_option( "soldering_iron", 1 ) } ) } );
 
     inventory inv;
     inv.add_item( item( itype_id( "soldering_iron" ) ) );
@@ -1582,16 +1607,19 @@ TEST_CASE( "phase3a_evaluate_alternative_or", "[crafting][requirement_index]" )
            crafting_requirement_result::unsatisfied );
 }
 
-TEST_CASE( "phase3a_evaluate_satisfied_alternative_overrides_unknown", "[crafting][requirement_index]" )
+TEST_CASE( "phase3a_evaluate_satisfied_alternative_overrides_unknown",
+           "[crafting][requirement_index]" )
 {
     // alt 0 contains a quality option (always unknown); alt 1 is exactly
     // satisfiable. The satisfied alternative wins over the unknown one.
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::quality,
-                                     { make_option( "CUT", 1,
-                                       fact_kind::quality_providers, 1 ) } ) } );
+        {
+            make_option( "CUT", 1,
+                         fact_kind::quality_providers, 1 )
+        } ) } );
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "stick", 1 ) } ) } );
+        { make_option( "stick", 1 ) } ) } );
 
     CHECK( eval_plan( "p3a_alt_beats_unknown", plan, make_stick_inventory( 1 ) ) ==
            crafting_requirement_result::satisfied );
@@ -1600,16 +1628,19 @@ TEST_CASE( "phase3a_evaluate_satisfied_alternative_overrides_unknown", "[craftin
            crafting_requirement_result::unknown );
 }
 
-TEST_CASE( "phase3a_evaluate_unsatisfied_plus_unknown_yields_unknown", "[crafting][requirement_index]" )
+TEST_CASE( "phase3a_evaluate_unsatisfied_plus_unknown_yields_unknown",
+           "[crafting][requirement_index]" )
 {
     // alt 0 is exactly unsatisfied; alt 1 is unknown (quality). OR of
     // unsatisfied and unknown must be unknown, never unsatisfied.
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "stick", 3 ) } ) } );
+        { make_option( "stick", 3 ) } ) } );
     plan.alternatives.push_back( { make_group( group_kind::quality,
-                                     { make_option( "CUT", 1,
-                                       fact_kind::quality_providers, 1 ) } ) } );
+        {
+            make_option( "CUT", 1,
+                         fact_kind::quality_providers, 1 )
+        } ) } );
 
     CHECK( eval_plan( "p3a_unsat_plus_unknown", plan, make_stick_inventory( 1 ) ) ==
            crafting_requirement_result::unknown );
@@ -1621,7 +1652,7 @@ TEST_CASE( "phase3a_evaluate_empty_alternative_satisfied", "[crafting][requireme
     // trivially satisfied with any inventory.
     crafting_requirement_plan plan;
     plan.alternatives.push_back( { make_group( group_kind::component,
-                                     { make_option( "unobtainium", 1 ) } ) } );
+        { make_option( "unobtainium", 1 ) } ) } );
     plan.alternatives.emplace_back();
 
     CHECK( eval_plan( "p3a_empty_alt", plan, make_stick_inventory( 0 ) ) ==
@@ -1659,7 +1690,8 @@ TEST_CASE( "phase3a_evaluate_wildcard_any_is_unknown", "[crafting][requirement_i
            crafting_requirement_result::unknown );
 }
 
-TEST_CASE( "phase3a_evaluate_component_id_in_two_groups_is_unknown", "[crafting][requirement_index]" )
+TEST_CASE( "phase3a_evaluate_component_id_in_two_groups_is_unknown",
+           "[crafting][requirement_index]" )
 {
     // The same component id in two distinct component groups: allocation is
     // ambiguous even when the counts would individually suffice.
@@ -1687,7 +1719,8 @@ TEST_CASE( "phase3a_evaluate_component_tool_overlap_is_unknown", "[crafting][req
            crafting_requirement_result::unknown );
 }
 
-TEST_CASE( "phase3a_evaluate_unsupported_missing_unfinalized_are_unknown", "[crafting][requirement_index]" )
+TEST_CASE( "phase3a_evaluate_unsupported_missing_unfinalized_are_unknown",
+           "[crafting][requirement_index]" )
 {
     const crafting_requirement_plan plan = one_group_plan( group_kind::component,
     { make_option( "stick", 1 ) } );
@@ -1724,7 +1757,8 @@ TEST_CASE( "phase3a_evaluate_invalid_menu_enum_is_unknown", "[crafting][requirem
            crafting_requirement_result::unknown );
 }
 
-TEST_CASE( "phase3a_evaluate_mode_specific_effective_filter_profiles", "[crafting][requirement_index]" )
+TEST_CASE( "phase3a_evaluate_mode_specific_effective_filter_profiles",
+           "[crafting][requirement_index]" )
 {
     // Recipe profiles: normal = none, no_rotten = none,
     // no_favorite = favorite_forbidden. One favorite stick satisfies the
@@ -1771,7 +1805,7 @@ TEST_CASE( "phase3b_tool_facts_ignore_component_filters", "[crafting][requiremen
     CHECK( index.fact_count() == 1 );
     CHECK( index.maximum_for( make_key( "stick", fact_kind::tool_instances ) ) == 1 );
     CHECK( index.maximum_for( make_key( "stick", fact_kind::tool_instances, 0,
-                                       recipe_filter_favorite_forbidden ) ) == 0 );
+                                        recipe_filter_favorite_forbidden ) ) == 0 );
     CHECK( eval.evaluate( rid( "p3b_favorite_tool" ), menu_mode::normal ) ==
            crafting_requirement_result::satisfied );
     CHECK( eval.evaluate( rid( "p3b_favorite_tool" ), menu_mode::no_favorite ) ==
@@ -1808,8 +1842,7 @@ TEST_CASE( "phase3b_filthy_items_are_not_exact_components", "[crafting][requirem
 namespace
 {
 
-struct phase3b_inventory_case
-{
+struct phase3b_inventory_case {
     const char *label;
     inventory inv;
 };
@@ -1846,14 +1879,16 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
         make_phase3b_inventory_case( "twenty_sticks", 20 ),
         make_phase3b_inventory_case( "twenty_favorite_sticks", 20, true ),
         make_phase3b_inventory_case( "twenty_frozen_sticks", 20, false, true ),
-        []() {
+        []()
+        {
             phase3b_inventory_case c;
             c.label = "soldering_iron_100_local_charges";
             item tool( itype_id( "soldering_iron" ) );
             tool.charges = 100;
             c.inv.add_item( tool );
             return c;
-        }()
+        }
+        ()
     };
 
     std::vector<crafting_inventory_snapshot> snapshots;
@@ -1959,12 +1994,12 @@ TEST_CASE( "phase3c_result_cache_boundaries", "[crafting][requirement_index]" )
     crafting_requirement_index index;
     crafting_requirement_plan exact;
     exact.alternatives.push_back( { make_group( group_kind::component,
-                                       { make_option( "stick", 2 ) } ) } );
+        { make_option( "stick", 2 ) } ) } );
     CHECK( index.add_recipe( rid( "p3c_exact" ), exact,
                              uniform_profiles( recipe_filter_none ) ) );
     crafting_requirement_plan unobtainable;
     unobtainable.alternatives.push_back( { make_group( group_kind::component,
-                                            { make_option( "unobtainium", 1 ) } ) } );
+        { make_option( "unobtainium", 1 ) } ) } );
     CHECK( index.add_recipe( rid( "p3c_unobtainable" ), unobtainable,
                              uniform_profiles( recipe_filter_none ) ) );
     CHECK( index.add_unsupported_recipe( rid( "p3c_unsupported" ), "no plan" ) );

@@ -190,9 +190,11 @@ std::array<int, menu_filter_mode_count> effective_profiles_for( const recipe &r 
         base |= recipe_filter_full_magazine_required;
     }
 
-    return { { base,
-               base | recipe_filter_rotten_forbidden,
-               base | recipe_filter_favorite_forbidden } };
+    return { {
+            base,
+            base | recipe_filter_rotten_forbidden,
+            base | recipe_filter_favorite_forbidden
+        } };
 }
 
 } // namespace

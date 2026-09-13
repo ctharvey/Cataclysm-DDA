@@ -761,9 +761,9 @@ crafting_requirement_result crafting_requirement_evaluator::evaluate(
                     : crafting_requirement_result::unsatisfied;
                 for( const crafting_requirement_option &opt : grp.options ) {
                     crafting_requirement_fact_key key = derive_key( opt,
-                            uses_component_filter( opt.kind )
-                            ? effective_profile
-                            : recipe_filter_none );
+                                                        uses_component_filter( opt.kind )
+                                                        ? effective_profile
+                                                        : recipe_filter_none );
                     if( key.id == "any" || !snapshot_.is_exact( key ) ) {
                         group_result = or_reduce( group_result,
                                                   crafting_requirement_result::unknown );
@@ -874,7 +874,7 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
                                    : menu_filter_mode_count;
             for( int m = first_mode; m < mode_limit; ++m ) {
                 std::vector<std::vector<crafting_requirement_result>> &groups =
-                    it->second[static_cast<std::size_t>( m )].groups;
+                            it->second[static_cast<std::size_t>( m )].groups;
                 if( static_cast<std::size_t>( edge.alternative ) >= groups.size() ) {
                     continue;
                 }
@@ -899,7 +899,7 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
             const crafting_requirement_plan *plan = index.plan_for( id );
             for( int m = 0; m < menu_filter_mode_count; ++m ) {
                 const std::vector<std::vector<crafting_requirement_result>> &groups =
-                    it->second[static_cast<std::size_t>( m )].groups;
+                            it->second[static_cast<std::size_t>( m )].groups;
                 crafting_requirement_result mode_result =
                     crafting_requirement_result::unsatisfied;
                 for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {

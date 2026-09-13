@@ -523,7 +523,7 @@ class crafting_ui_impl : public cataimgui::window
         std::map<character_id, std::map<const recipe *, availability>> guy_availability_cache;
         std::map<const recipe *, availability> *availability_cache;
         std::map<character_id, std::unique_ptr<crafting_requirement_result_cache>>
-        guy_requirement_caches;
+                guy_requirement_caches;
         const crafting_requirement_result_cache *requirement_cache = nullptr;
         std::unique_ptr<recipe_result_info_cache> result_info;
 
