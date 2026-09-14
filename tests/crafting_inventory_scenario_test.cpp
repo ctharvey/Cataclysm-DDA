@@ -6,8 +6,14 @@
 // All inventories are constructed in code; no saves, userdata, filesystem
 // fixtures, or running game state are consulted by the matrix itself.
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
+#include <functional>
+#include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -30,6 +36,11 @@
 #include "recipe_dictionary.h"
 #include "requirements.h"
 #include "type_id.h"
+#include "uistate.h"
+#include "units.h"
+#include "veh_type.h"
+#include "vehicle.h"
+#include "vpart_position.h"
 
 using fact_kind = crafting_requirement_fact_kind;
 using menu_mode = menu_filter_mode;
@@ -42,6 +53,9 @@ static const itype_id itype_stick( "stick" );
 
 static const recipe_id recipe_cudgel_test_no_tools( "cudgel_test_no_tools" );
 static const recipe_id recipe_test_tallow( "test_tallow" );
+
+static const crafting_category_id crafting_category_armor( "CC_ARMOR" );
+static const vproto_id vehicle_prototype_test_shopping_cart( "test_shopping_cart" );
 
 static const skill_id skill_cooking( "cooking" );
 static const skill_id skill_fabrication( "fabrication" );
@@ -604,6 +618,63 @@ Character &setup_matrix_character()
     return guy;
 }
 
+class recipe_ui_state_guard
+{
+    public:
+        recipe_ui_state_guard() :
+            hidden( uistate.hidden_recipes ),
+            expanded( uistate.expanded_recipes ),
+            read( uistate.read_recipes ) {
+            uistate.hidden_recipes.clear();
+            uistate.expanded_recipes.clear();
+            uistate.read_recipes.clear();
+        }
+
+        ~recipe_ui_state_guard() {
+            uistate.hidden_recipes = hidden;
+            uistate.expanded_recipes = expanded;
+            uistate.read_recipes = read;
+        }
+
+    private:
+        decltype( uistate.hidden_recipes ) hidden;
+        decltype( uistate.expanded_recipes ) expanded;
+        decltype( uistate.read_recipes ) read;
+};
+
+double median_milliseconds( const std::function<void()> &operation, int samples )
+{
+    std::vector<double> timings;
+    timings.reserve( samples );
+    for( int i = 0; i < samples; ++i ) {
+        const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        operation();
+        const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        timings.push_back( std::chrono::duration<double, std::milli>( end - start ).count() );
+    }
+    std::sort( timings.begin(), timings.end() );
+    return timings[timings.size() / 2];
+}
+
+bool recipe_plan_has_tool_charges( const crafting_requirement_index &index,
+                                   const recipe_id &id )
+{
+    const crafting_requirement_plan *plan = index.plan_for( id );
+    if( plan == nullptr ) {
+        return false;
+    }
+    for( const crafting_requirement_alternative &alternative : plan->alternatives ) {
+        for( const crafting_requirement_group &group : alternative ) {
+            for( const crafting_requirement_option &option : group.options ) {
+                if( option.kind == fact_kind::tool_charges ) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 TEST_CASE( "crafting_inventory_scenario_menu_availability",
@@ -1155,4 +1226,286 @@ TEST_CASE( "crafting_inventory_scenario_volume_benchmark",
             };
         }
     }
+}
+
+// Hidden end-to-end benchmark for the expensive path behind opening a
+// populated crafting category.  Unlike the synthetic inventory benchmark
+// above, this starts with concrete carried, map, and vehicle items and calls
+// the same inventory assembly and recipe-list helper used by the menu.
+TEST_CASE( "crafting_category_pipeline_benchmark",
+           "[.][crafting_category_pipeline][benchmark]" )
+{
+    constexpr int carried_item_count = 40;
+    constexpr int map_item_count = 5000;
+    constexpr int vehicle_item_target = 200;
+    constexpr int repeated_samples = 3;
+
+    recipe_ui_state_guard ui_state_guard;
+    Character &guy = setup_matrix_character();
+    guy.set_all_skills( 10 );
+    map &here = get_map();
+
+    for( int i = 0; i < carried_item_count; ++i ) {
+        guy.i_add( item( i % 2 == 0 ? itype_stick : itype_rock ) );
+    }
+
+    const std::array<tripoint_bub_ms, 4> clutter_tiles = { {
+            guy.pos_bub(),
+            guy.pos_bub() + tripoint::north,
+            guy.pos_bub() + tripoint::south,
+            guy.pos_bub() + tripoint::west
+        }
+    };
+    for( int i = 0; i < map_item_count; ++i ) {
+        item clutter;
+        switch( i % 4 ) {
+            case 0:
+                clutter = item( itype_stick );
+                clutter.is_favorite = i % 17 == 0;
+                break;
+            case 1:
+                clutter = item( itype_rock );
+                break;
+            case 2:
+                clutter = item( itype_fat );
+                if( i % 19 == 0 ) {
+                    clutter.set_rot( 1000_hours );
+                }
+                break;
+            default:
+                clutter = item( itype_2x4 );
+                if( i % 23 == 0 ) {
+                    clutter.set_flag( flag_ITEM_BROKEN );
+                }
+                break;
+        }
+        here.add_item( clutter_tiles[i % clutter_tiles.size()], clutter );
+    }
+
+    const tripoint_bub_ms vehicle_pos = guy.pos_bub() + tripoint::east;
+    REQUIRE( here.add_vehicle( vehicle_prototype_test_shopping_cart, vehicle_pos,
+                               0_degrees, 0, veh_spawn_status::UNDAMAGED ) );
+    std::optional<vpart_reference> cargo = here.veh_at( here.get_abs( vehicle_pos ) ).cargo();
+    REQUIRE( cargo );
+    int vehicle_item_count = 0;
+    for( int i = 0; i < vehicle_item_target; ++i ) {
+        item cargo_item( i % 2 == 0 ? itype_stick : itype_rock );
+        if( !cargo->vehicle().add_item( here, cargo->part(), cargo_item ) ) {
+            break;
+        }
+        ++vehicle_item_count;
+    }
+    REQUIRE( vehicle_item_count > 0 );
+
+    std::size_t timing_sink = 0;
+    const double inventory_assembly_ms = median_milliseconds( [&]() {
+        guy.invalidate_crafting_inventory();
+        timing_sink += guy.crafting_inventory().size();
+    }, repeated_samples );
+
+    // test_mode deliberately rebuilds the available-recipe subset on every
+    // call.  Keep the crafting inventory warm here so this line isolates
+    // recipe discovery rather than measuring inventory assembly twice.
+    const double recipe_discovery_ms = median_milliseconds( [&]() {
+        timing_sink += guy.get_group_available_recipes().size();
+    }, repeated_samples );
+    recipe_subset &available_recipes = guy.get_group_available_recipes();
+    REQUIRE( available_recipes.size() > 0 );
+
+    std::vector<const recipe *> picking = available_recipes.in_category( crafting_category_armor );
+    const bool used_armor_category = !picking.empty();
+    if( picking.empty() ) {
+        picking.assign( available_recipes.begin(), available_recipes.end() );
+    }
+    REQUIRE( picking.size() > 0 );
+
+    std::vector<const recipe *> nested_picking = picking;
+    std::size_t nested_root_count = std::count_if( nested_picking.begin(), nested_picking.end(),
+    []( const recipe * rec ) {
+        return rec->is_nested();
+    } );
+    bool added_nested_probe = false;
+    if( nested_root_count == 0 ) {
+        for( const recipe *rec : available_recipes ) {
+            if( rec->is_nested() ) {
+                nested_picking.push_back( rec );
+                nested_root_count = 1;
+                added_nested_probe = true;
+                break;
+            }
+        }
+    }
+
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const inventory &assembled_inventory = guy.crafting_inventory();
+    CHECK( assembled_inventory.amount_of( itype_stick ) > 0 );
+    CHECK( assembled_inventory.amount_of( itype_rock ) > 0 );
+
+    const double snapshot_ms = median_milliseconds( [&]() {
+        const crafting_inventory_snapshot snapshot( index, assembled_inventory );
+        timing_sink += snapshot.saturated_fact_count();
+    }, repeated_samples );
+    const crafting_inventory_snapshot prepared_snapshot( index, assembled_inventory );
+
+    const double result_cache_ms = median_milliseconds( [&]() {
+        const crafting_requirement_result_cache cache( index, prepared_snapshot );
+        timing_sink += cache.cached_recipe_count();
+    }, repeated_samples );
+    const crafting_requirement_result_cache requirement_cache( index, prepared_snapshot );
+
+    std::array<std::size_t, matrix_menu_count> graph_satisfied = {};
+    std::array<std::size_t, matrix_menu_count> graph_unsatisfied = {};
+    std::array<std::size_t, matrix_menu_count> graph_unknown = {};
+    std::size_t unsupported_recipe_count = 0;
+    std::size_t nested_bypass_count = 0;
+    std::size_t tool_charge_bypass_count = 0;
+    std::size_t apparent_check_candidates = 0;
+    for( const recipe *rec : picking ) {
+        const crafting_recipe_support *support = index.support_for( rec->ident() );
+        if( support == nullptr || support->state == recipe_support_state::unsupported ) {
+            ++unsupported_recipe_count;
+        }
+        if( rec->is_nested() ) {
+            ++nested_bypass_count;
+        }
+        if( recipe_plan_has_tool_charges( index, rec->ident() ) ) {
+            ++tool_charge_bypass_count;
+        }
+        for( std::size_t mode = 0; mode < matrix_menu_count; ++mode ) {
+            switch( requirement_cache.evaluate( rec->ident(), matrix_menus[mode] ) ) {
+                case crafting_requirement_result::satisfied:
+                    ++graph_satisfied[mode];
+                    break;
+                case crafting_requirement_result::unsatisfied:
+                    ++graph_unsatisfied[mode];
+                    break;
+                case crafting_requirement_result::unknown:
+                    ++graph_unknown[mode];
+                    break;
+            }
+        }
+        if( !rec->is_nested() &&
+            requirement_cache.evaluate( rec->ident(), menu_mode::normal ) ==
+            crafting_requirement_result::unsatisfied &&
+            rec->character_has_required_proficiencies( guy ) &&
+            rec->character_meets_requirements( guy ) ) {
+            ++apparent_check_candidates;
+        }
+    }
+
+    std::map<const recipe *, availability> legacy_availability;
+    const recipe_list_data legacy_list = build_recipe_list(
+            picking, false, false, guy, false, nullptr, false, false,
+            legacy_availability, available_recipes, nullptr );
+    std::map<const recipe *, availability> cached_availability;
+    const recipe_list_data cached_list = build_recipe_list(
+            picking, false, false, guy, false, nullptr, false, false,
+            cached_availability, available_recipes, &requirement_cache );
+
+    REQUIRE( cached_list.entries.size() == legacy_list.entries.size() );
+    REQUIRE( cached_list.available.size() == legacy_list.available.size() );
+    for( std::size_t i = 0; i < legacy_list.entries.size(); ++i ) {
+        CAPTURE( i, legacy_list.entries[i]->ident(), cached_list.entries[i]->ident() );
+        CHECK( cached_list.entries[i]->ident() == legacy_list.entries[i]->ident() );
+        CHECK( cached_list.available[i].can_craft_recipe ==
+               legacy_list.available[i].can_craft_recipe );
+        CHECK( cached_list.available[i].would_use_rotten ==
+               legacy_list.available[i].would_use_rotten );
+        CHECK( cached_list.available[i].would_use_favorite ==
+               legacy_list.available[i].would_use_favorite );
+        CHECK( cached_list.available[i].apparently_craftable ==
+               legacy_list.available[i].apparently_craftable );
+        CHECK( cached_list.available[i].color() == legacy_list.available[i].color() );
+    }
+
+    const double legacy_cold_sorted_ms = median_milliseconds( [&]() {
+        std::map<const recipe *, availability> cold_availability;
+        const recipe_list_data result = build_recipe_list(
+                                            picking, false, false, guy, false, nullptr, false, false,
+                                            cold_availability, available_recipes, nullptr );
+        timing_sink += result.entries.size();
+    }, 1 );
+    const double cached_cold_availability_ms = median_milliseconds( [&]() {
+        std::map<const recipe *, availability> cold_availability;
+        const recipe_list_data result = build_recipe_list(
+                                            picking, false, true, guy, false, nullptr, false, false,
+                                            cold_availability, available_recipes, &requirement_cache );
+        timing_sink += result.entries.size();
+    }, repeated_samples );
+    const double cached_cold_sorted_ms = median_milliseconds( [&]() {
+        std::map<const recipe *, availability> cold_availability;
+        const recipe_list_data result = build_recipe_list(
+                                            picking, false, false, guy, false, nullptr, false, false,
+                                            cold_availability, available_recipes, &requirement_cache );
+        timing_sink += result.entries.size();
+    }, repeated_samples );
+    const double warm_unsorted_ms = median_milliseconds( [&]() {
+        const recipe_list_data result = build_recipe_list(
+                                            picking, false, true, guy, false, nullptr, false, false,
+                                            cached_availability, available_recipes, &requirement_cache );
+        timing_sink += result.entries.size();
+    }, repeated_samples );
+    const double warm_sorted_ms = median_milliseconds( [&]() {
+        const recipe_list_data result = build_recipe_list(
+                                            picking, false, false, guy, false, nullptr, false, false,
+                                            cached_availability, available_recipes, &requirement_cache );
+        timing_sink += result.entries.size();
+    }, repeated_samples );
+
+    double warm_expanded_ms = 0.0;
+    std::size_t expanded_entry_count = nested_picking.size();
+    if( nested_root_count > 0 ) {
+        for( const recipe *rec : nested_picking ) {
+            if( rec->is_nested() ) {
+                uistate.expanded_recipes.insert( rec->ident() );
+            }
+        }
+        std::map<const recipe *, availability> expanded_availability = cached_availability;
+        const recipe_list_data prepared_expanded = build_recipe_list(
+                    nested_picking, false, false, guy, false, nullptr, false, false,
+                    expanded_availability, available_recipes, &requirement_cache );
+        expanded_entry_count = prepared_expanded.entries.size();
+        warm_expanded_ms = median_milliseconds( [&]() {
+            const recipe_list_data result = build_recipe_list(
+                                                nested_picking, false, false, guy, false, nullptr, false, false,
+                                                expanded_availability, available_recipes, &requirement_cache );
+            timing_sink += result.entries.size();
+        }, repeated_samples );
+    }
+
+    CHECK( timing_sink > 0 );
+    CHECK( graph_satisfied[0] + graph_unsatisfied[0] + graph_unknown[0] == picking.size() );
+    WARN( "crafting category pipeline benchmark (median unless noted)\n"
+          << "source items: carried=" << carried_item_count
+          << " map=" << map_item_count << " vehicle=" << vehicle_item_count << "\n"
+          << "recipe source: " << ( used_armor_category ? "CC_ARMOR" : "all available fallback" )
+          << " picking=" << picking.size() << " available=" << available_recipes.size() << "\n"
+          << "inventory assembly: " << inventory_assembly_ms << " ms\n"
+          << "available-recipe discovery (warm inventory): " << recipe_discovery_ms << " ms\n"
+          << "snapshot construction: " << snapshot_ms << " ms"
+          << " facts=" << prepared_snapshot.fact_count()
+          << " saturated=" << prepared_snapshot.saturated_fact_count()
+          << " inexact=" << prepared_snapshot.inexact_fact_count()
+          << " unsupported=" << prepared_snapshot.unsupported_fact_count() << "\n"
+          << "result-cache construction: " << result_cache_ms << " ms"
+          << " recipes=" << requirement_cache.cached_recipe_count() << "\n"
+          << "graph normal satisfied/unsatisfied/unknown: "
+          << graph_satisfied[0] << "/" << graph_unsatisfied[0] << "/" << graph_unknown[0] << "\n"
+          << "graph no-rotten satisfied/unsatisfied/unknown: "
+          << graph_satisfied[1] << "/" << graph_unsatisfied[1] << "/" << graph_unknown[1] << "\n"
+          << "graph no-favorite satisfied/unsatisfied/unknown: "
+          << graph_satisfied[2] << "/" << graph_unsatisfied[2] << "/" << graph_unknown[2] << "\n"
+          << "bypass indicators: unsupported_recipe=" << unsupported_recipe_count
+          << " nested=" << nested_bypass_count
+          << " tool_charges=" << tool_charge_bypass_count
+          << " apparent_check_candidate=" << apparent_check_candidates << "\n"
+          << "legacy cold availability+sort (single sample): " << legacy_cold_sorted_ms << " ms\n"
+          << "cached cold availability/list without sort: " << cached_cold_availability_ms << " ms\n"
+          << "cached cold availability+sort: " << cached_cold_sorted_ms << " ms\n"
+          << "cached warm list without sort: " << warm_unsorted_ms << " ms\n"
+          << "cached warm list+sort: " << warm_sorted_ms << " ms"
+          << " (sort delta " << warm_sorted_ms - warm_unsorted_ms << " ms)\n"
+          << "cached warm expanded list+sort: " << warm_expanded_ms << " ms"
+          << " roots=" << nested_root_count << " entries=" << expanded_entry_count
+          << " added_probe=" << added_nested_probe );
 }
