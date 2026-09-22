@@ -1257,7 +1257,7 @@ void crafting_ui_impl::draw_recipe_info_panel()
             const bool npc_cant = avail.crafter.is_npc()
                                   && !recp.npc_can_craft( npc_reason )
                                   && !avail.inv_override;
-            if( !avail.can_craft_recipe && avail.apparently_craftable
+            if( !avail.can_craft_recipe && avail.is_apparently_craftable()
                 && !npc_cant ) {
                 cataimgui::TextColoredParagraphNewline( c_red,
                                                         _( "Cannot be crafted because the same item is needed "

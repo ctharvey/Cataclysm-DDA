@@ -850,6 +850,9 @@ void recipe_dictionary::build_requirements_index()
     for( const auto &e : recipe_dict.recipes ) {
         const recipe &r = e.second;
         const recipe_id &id = e.first;
+        const std::array<int, menu_filter_mode_count> profiles = effective_profiles_for( r );
+        const std::optional<std::vector<crafting_requirement_option>> overlap_guard =
+                    make_apparent_overlap_guard( r.simple_requirements() );
 
         std::string reason;
         if( r.obsolete ) {
@@ -864,6 +867,10 @@ void recipe_dictionary::build_requirements_index()
 
         if( !reason.empty() ) {
             index.add_unsupported_recipe( id, reason );
+            if( overlap_guard ) {
+                index.set_apparent_overlap_guard( id, *overlap_guard,
+                                                  profiles[static_cast<int>( menu_filter_mode::normal )] );
+            }
             continue;
         }
 
@@ -878,7 +885,11 @@ void recipe_dictionary::build_requirements_index()
             plan.alternatives.push_back( std::move( groups ) );
         }
 
-        if( ok && index.add_recipe( id, plan, effective_profiles_for( r ), &reason ) ) {
+        if( ok && index.add_recipe( id, plan, profiles, &reason ) ) {
+            if( overlap_guard ) {
+                index.set_apparent_overlap_guard( id, *overlap_guard,
+                                                  profiles[static_cast<int>( menu_filter_mode::normal )] );
+            }
             continue;
         }
         if( reason.empty() ) {
@@ -887,6 +898,10 @@ void recipe_dictionary::build_requirements_index()
         // add_recipe validated first and left the index unmodified on
         // failure, so recording the recipe as unsupported here is exact.
         index.add_unsupported_recipe( id, reason );
+        if( overlap_guard ) {
+            index.set_apparent_overlap_guard( id, *overlap_guard,
+                                              profiles[static_cast<int>( menu_filter_mode::normal )] );
+        }
     }
 
     index.finalize();

@@ -187,7 +187,7 @@ TEST_CASE( "recipe_availability_requirement_cache_exact_positive", "[crafting][g
     CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
     CHECK( cached.would_use_rotten == legacy.would_use_rotten );
     CHECK( cached.would_use_favorite == legacy.would_use_favorite );
-    CHECK( cached.apparently_craftable == legacy.apparently_craftable );
+    CHECK( cached.is_apparently_craftable() == legacy.is_apparently_craftable() );
     CHECK( cached.color() == legacy.color() );
 }
 
@@ -208,8 +208,77 @@ TEST_CASE( "recipe_availability_requirement_cache_exact_negative", "[crafting][g
     const availability legacy( guy, &rec );
     const availability cached( guy, &rec, 1, false, nullptr, &cache );
     CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
-    CHECK( cached.apparently_craftable == legacy.apparently_craftable );
+    CHECK( cached.apparent_craftability_is_known() );
+    CHECK( cached.is_apparently_craftable() == legacy.is_apparently_craftable() );
     CHECK( cached.color() == legacy.color() );
+}
+
+TEST_CASE( "recipe_availability_defers_ambiguous_apparent_craftability",
+           "[crafting][gui][requirement_index]" )
+{
+    Character &guy = setup_character();
+    guy.set_skill_level( skill_fabrication, 2 );
+    guy.set_skill_level( skill_melee, 1 );
+    guy.invalidate_crafting_inventory();
+
+    const recipe &rec = recipe_cudgel_test_no_tools.obj();
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { crafting_requirement_group{
+            requirement_group_kind::component,
+            {
+                crafting_requirement_option{
+                    crafting_requirement_fact_kind::component_units,
+                    itype_2x4.str(), 0, 2
+                }
+            }
+        } } );
+    REQUIRE( index.add_recipe( rec.ident(), plan, {
+        {
+            recipe_filter_none, recipe_filter_none,
+            recipe_filter_none
+        }
+    } ) );
+    crafting_requirement_option overlap;
+    overlap.kind = crafting_requirement_fact_kind::component_units;
+    overlap.id = itype_2x4.str();
+    overlap.threshold = 2;
+    REQUIRE( index.set_apparent_overlap_guard( rec.ident(), { overlap },
+             recipe_filter_none ) );
+    index.finalize();
+
+    SECTION( "a selected recipe caches a false legacy result" ) {
+        const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+        const crafting_requirement_result_cache cache( index, snapshot );
+        REQUIRE( cache.evaluate( rec.ident(), menu_filter_mode::normal ) ==
+                 crafting_requirement_result::unsatisfied );
+        REQUIRE( cache.apparent_craftability_needs_legacy_check( rec.ident() ) );
+
+        const availability cached( guy, &rec, 1, false, nullptr, &cache );
+        CHECK_FALSE( cached.can_craft_recipe );
+        CHECK_FALSE( cached.apparent_craftability_is_known() );
+        CHECK_FALSE( cached.is_apparently_craftable() );
+        CHECK( cached.apparent_craftability_is_known() );
+        // A second panel draw reads the memoized answer.
+        CHECK_FALSE( cached.is_apparently_craftable() );
+    }
+
+    SECTION( "a selected recipe preserves and caches the overlap warning" ) {
+        guy.i_add( item( itype_2x4 ) );
+        guy.invalidate_crafting_inventory();
+        const crafting_inventory_snapshot snapshot( index, guy.crafting_inventory() );
+        const crafting_requirement_result_cache cache( index, snapshot );
+        REQUIRE( cache.evaluate( rec.ident(), menu_filter_mode::normal ) ==
+                 crafting_requirement_result::unsatisfied );
+        REQUIRE( cache.apparent_craftability_needs_legacy_check( rec.ident() ) );
+
+        const availability cached( guy, &rec, 1, false, nullptr, &cache );
+        CHECK_FALSE( cached.can_craft_recipe );
+        CHECK_FALSE( cached.apparent_craftability_is_known() );
+        CHECK( cached.is_apparently_craftable() );
+        CHECK( cached.apparent_craftability_is_known() );
+        CHECK( cached.is_apparently_craftable() );
+    }
 }
 
 TEST_CASE( "recipe_availability_requirement_cache_nested", "[crafting][gui]" )

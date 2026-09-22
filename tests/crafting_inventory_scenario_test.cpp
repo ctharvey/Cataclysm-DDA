@@ -716,7 +716,7 @@ TEST_CASE( "crafting_inventory_scenario_menu_availability",
         CHECK( avail.can_craft_recipe );
         // This diagnostic is only set when the deduplicated requirement
         // check fails but the simpler overlapping-component check passes.
-        CHECK_FALSE( avail.apparently_craftable );
+        CHECK_FALSE( avail.is_apparently_craftable() );
         CHECK( avail.has_all_skills );
         CHECK_FALSE( avail.would_use_rotten );
         CHECK_FALSE( avail.would_use_favorite );
@@ -834,7 +834,7 @@ TEST_CASE( "crafting_inventory_scenario_menu_availability",
         CHECK( cached.can_craft_recipe == legacy.can_craft_recipe );
         CHECK( cached.would_use_rotten == legacy.would_use_rotten );
         CHECK( cached.would_use_favorite == legacy.would_use_favorite );
-        CHECK( cached.apparently_craftable == legacy.apparently_craftable );
+        CHECK( cached.is_apparently_craftable() == legacy.is_apparently_craftable() );
         CHECK( cached.has_proficiencies == legacy.has_proficiencies );
         CHECK( cached.has_all_skills == legacy.has_all_skills );
         CHECK( cached.is_nested_category == legacy.is_nested_category );
@@ -1360,6 +1360,7 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
     std::size_t nested_bypass_count = 0;
     std::size_t tool_charge_bypass_count = 0;
     std::size_t apparent_check_candidates = 0;
+    std::size_t apparent_legacy_fallback_candidates = 0;
     for( const recipe *rec : picking ) {
         const crafting_recipe_support *support = index.support_for( rec->ident() );
         if( support == nullptr || support->state == recipe_support_state::unsupported ) {
@@ -1390,6 +1391,9 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
             rec->character_has_required_proficiencies( guy ) &&
             rec->character_meets_requirements( guy ) ) {
             ++apparent_check_candidates;
+            if( requirement_cache.apparent_craftability_needs_legacy_check( rec->ident() ) ) {
+                ++apparent_legacy_fallback_candidates;
+            }
         }
     }
 
@@ -1413,8 +1417,8 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
                legacy_list.available[i].would_use_rotten );
         CHECK( cached_list.available[i].would_use_favorite ==
                legacy_list.available[i].would_use_favorite );
-        CHECK( cached_list.available[i].apparently_craftable ==
-               legacy_list.available[i].apparently_craftable );
+        CHECK( cached_list.available[i].is_apparently_craftable() ==
+               legacy_list.available[i].is_apparently_craftable() );
         CHECK( cached_list.available[i].color() == legacy_list.available[i].color() );
     }
 
@@ -1498,7 +1502,8 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
           << "bypass indicators: unsupported_recipe=" << unsupported_recipe_count
           << " nested=" << nested_bypass_count
           << " tool_charges=" << tool_charge_bypass_count
-          << " apparent_check_candidate=" << apparent_check_candidates << "\n"
+          << " apparent_check_candidate=" << apparent_check_candidates
+          << " apparent_legacy_fallback_candidate=" << apparent_legacy_fallback_candidates << "\n"
           << "legacy cold availability+sort (single sample): " << legacy_cold_sorted_ms << " ms\n"
           << "cached cold availability/list without sort: " << cached_cold_availability_ms << " ms\n"
           << "cached cold availability+sort: " << cached_cold_sorted_ms << " ms\n"

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "type_id.h"
 
 class inventory;
+class requirement_data;
 
 // The kind of fact a requirement option ultimately counts against.
 enum class crafting_requirement_fact_kind : int {
@@ -111,6 +113,22 @@ struct crafting_requirement_plan {
     std::vector<crafting_requirement_alternative> alternatives;
 };
 
+// Sufficient-stock thresholds for item ids that occur in more than one
+// component group in the recipe's original (non-deduplicated) requirements.
+// If every threshold is met, component allocation cannot be why the exact
+// solver rejected a recipe. `known` distinguishes a recipe with no overlaps
+// (known with an empty threshold list) from a shape that could not be indexed.
+struct crafting_apparent_overlap_guard {
+    bool known = false;
+    int filter_profile = recipe_filter_none;
+    std::vector<crafting_requirement_option> thresholds;
+};
+
+// Derives the sufficient-stock thresholds from original recipe requirements.
+// Returns nullopt when the component shape cannot be represented safely.
+std::optional<std::vector<crafting_requirement_option>> make_apparent_overlap_guard(
+            const requirement_data &requirements );
+
 // Reverse edge from a fact back to the recipe coordinate that registered a
 // threshold. All fields together identify exactly one option threshold.
 struct crafting_requirement_edge {
@@ -134,6 +152,7 @@ struct crafting_recipe_record {
     recipe_id id;
     crafting_recipe_support support;
     crafting_requirement_plan plan;
+    crafting_apparent_overlap_guard apparent_overlap;
 };
 
 // Standalone immutable index of crafting requirement facts, built from
@@ -167,6 +186,17 @@ class crafting_requirement_index
         bool add_unsupported_recipe( const recipe_id &recipe_id,
                                      const std::string &reason,
                                      std::string *error = nullptr );
+
+        // Records the sufficient-stock guard for the recipe's original
+        // overlapping component groups. An empty list means the recipe has no
+        // component overlap. The guard contributes thresholds, but no recipe
+        // evaluation edges, so the inventory snapshot can answer it without
+        // changing normal craftability results.
+        bool set_apparent_overlap_guard(
+            const recipe_id &recipe_id,
+            const std::vector<crafting_requirement_option> &thresholds,
+            int effective_filter_profile,
+            std::string *error = nullptr );
 
         // Sorts and deduplicates every threshold list, computes maxima,
         // sorts and deduplicates reverse edges, and freezes the index.
@@ -202,6 +232,12 @@ class crafting_requirement_index
         // Retained full plan of a supported recipe; nullptr for unsupported
         // and unknown ids. Required for Phase 3 graph propagation.
         const crafting_requirement_plan *plan_for( const recipe_id &recipe_id ) const;
+
+        // Original-requirement overlap guard, or nullptr for an unknown id.
+        // A non-null guard may still have known == false when indexing was not
+        // possible and callers must retain the legacy fallback.
+        const crafting_apparent_overlap_guard *apparent_overlap_guard_for(
+            const recipe_id &recipe_id ) const;
 
         // Effective filter profile bitmask recorded for a recipe under the
         // given menu mode, or recipe_filter_none.
@@ -348,6 +384,13 @@ class crafting_requirement_evaluator
         crafting_requirement_result evaluate( const recipe_id &recipe_id,
                                               menu_filter_mode menu ) const;
 
+        // True when the snapshot cannot rule out a simple-vs-exact component
+        // allocation mismatch. False is a proof that apparently_craftable
+        // cannot be true; true must be resolved by the legacy simple check if
+        // the UI actually needs the explanation.
+        bool apparent_craftability_needs_legacy_check(
+            const recipe_id &recipe_id ) const;
+
     private:
         const crafting_requirement_index &index_;
         const crafting_inventory_snapshot &snapshot_;
@@ -377,11 +420,15 @@ class crafting_requirement_result_cache
         crafting_requirement_result evaluate( const recipe_id &recipe_id,
                                               menu_filter_mode menu ) const;
 
+        bool apparent_craftability_needs_legacy_check(
+            const recipe_id &recipe_id ) const;
+
         // Number of recipes with a cached per-mode result.
         std::size_t cached_recipe_count() const;
 
     private:
         std::map<recipe_id, std::array<crafting_requirement_result, menu_filter_mode_count>> results_;
+        std::map<recipe_id, bool> apparent_legacy_needed_;
 };
 
 #endif // CATA_SRC_CRAFTING_REQUIREMENT_INDEX_H

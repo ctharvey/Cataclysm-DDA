@@ -134,6 +134,84 @@ TEST_CASE( "crafting_requirement_index_threshold_validation", "[crafting]" )
     CHECK( index.thresholds_for( steel ) == std::vector<int> { 5 } );
 }
 
+TEST_CASE( "crafting_apparent_overlap_guard_derivation",
+           "[crafting][requirement_index]" )
+{
+    const itype_id stick( "stick" );
+    const itype_id rock( "rock" );
+    REQUIRE_FALSE( item::count_by_charges( stick ) );
+    REQUIRE( item::count_by_charges( rock ) );
+
+    SECTION( "no component id shared across groups needs no thresholds" ) {
+        const requirement_data requirements( {}, {}, {
+            { { stick, 1 }, { rock, 5 } }
+        } );
+        const auto guard = make_apparent_overlap_guard( requirements );
+        REQUIRE( guard );
+        CHECK( guard->empty() );
+    }
+
+    SECTION( "OR groups contribute their per-id maxima to simultaneous demand" ) {
+        const requirement_data requirements( {}, {}, {
+            { { stick, 1 }, { rock, 5 } },
+            { { stick, 2 } },
+            { { rock, 7 } }
+        } );
+        const auto guard = make_apparent_overlap_guard( requirements );
+        REQUIRE( guard );
+        REQUIRE( guard->size() == 2 );
+        CHECK( ( *guard )[0].kind == fact_kind::component_units );
+        CHECK( ( *guard )[0].id == "stick" );
+        CHECK( ( *guard )[0].threshold == 3 );
+        CHECK( ( *guard )[1].kind == fact_kind::component_charges );
+        CHECK( ( *guard )[1].id == "rock" );
+        CHECK( ( *guard )[1].threshold == 12 );
+    }
+
+    SECTION( "duplicate alternatives inside one group use the largest count once" ) {
+        const requirement_data requirements( {}, {}, {
+            { { stick, 1 }, { stick, 4 } },
+            { { stick, -2 } }
+        } );
+        const auto guard = make_apparent_overlap_guard( requirements );
+        REQUIRE( guard );
+        REQUIRE( guard->size() == 1 );
+        CHECK( guard->front().threshold == 6 );
+    }
+}
+
+TEST_CASE( "crafting_apparent_overlap_guard_registers_snapshot_thresholds_only",
+           "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::component,
+        { make_option( "stick", 1 ) } ) } );
+    const recipe_id recipe = rid( "overlap_guard" );
+    REQUIRE( index.add_recipe( recipe, plan, uniform_profiles( recipe_filter_none ) ) );
+    const std::size_t requirement_edge_count = index.edges_for( make_key( "stick" ) ).size();
+
+    const std::vector<crafting_requirement_option> guard = { make_option( "stick", 2 ) };
+    CHECK( index.set_apparent_overlap_guard( recipe, guard, recipe_filter_none ) );
+    const crafting_apparent_overlap_guard *stored = index.apparent_overlap_guard_for( recipe );
+    REQUIRE( stored != nullptr );
+    CHECK( stored->known );
+    REQUIRE( stored->thresholds.size() == 1 );
+    CHECK( stored->thresholds.front().kind == fact_kind::component_units );
+    CHECK( stored->thresholds.front().id == "stick" );
+    CHECK( stored->thresholds.front().threshold == 2 );
+
+    index.finalize();
+    CHECK( index.thresholds_for( make_key( "stick" ) ) == std::vector<int> { 1, 2 } );
+    CHECK( index.maximum_for( make_key( "stick" ) ) == 2 );
+    CHECK( index.edges_for( make_key( "stick" ) ).size() == requirement_edge_count );
+
+    std::string error;
+    CHECK_FALSE( index.set_apparent_overlap_guard( recipe, guard,
+                 recipe_filter_none, &error ) );
+    CHECK_FALSE( error.empty() );
+}
+
 TEST_CASE( "crafting_requirement_index_finalize_sorts_and_deduplicates", "[crafting]" )
 {
     crafting_requirement_index index;
@@ -959,6 +1037,57 @@ TEST_CASE( "requirement_index_loaded_dictionary_one_explicit_record_per_recipe",
             }
         }
     }
+}
+
+TEST_CASE( "requirement_index_loaded_dictionary_retains_apparent_overlap_guards",
+           "[crafting][requirement_index]" )
+{
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    REQUIRE( index.is_finalized() );
+
+    for( const auto &entry : recipe_dict ) {
+        const recipe_id &id = entry.first;
+        const auto expected = make_apparent_overlap_guard(
+                                  entry.second.simple_requirements() );
+        const crafting_apparent_overlap_guard *stored =
+            index.apparent_overlap_guard_for( id );
+        INFO( "recipe: " << id.str() );
+        REQUIRE( stored != nullptr );
+        if( !expected ) {
+            CHECK_FALSE( stored->known );
+            continue;
+        }
+
+        REQUIRE( stored->known );
+        REQUIRE( stored->thresholds.size() == expected->size() );
+        for( std::size_t i = 0; i < expected->size(); ++i ) {
+            CAPTURE( i );
+            CHECK( stored->thresholds[i].kind == ( *expected )[i].kind );
+            CHECK( stored->thresholds[i].id == ( *expected )[i].id );
+            CHECK( stored->thresholds[i].level == ( *expected )[i].level );
+            CHECK( stored->thresholds[i].threshold == ( *expected )[i].threshold );
+
+            crafting_requirement_fact_key key;
+            key.kind = stored->thresholds[i].kind;
+            key.id = stored->thresholds[i].id;
+            key.level = stored->thresholds[i].level;
+            key.filter_profile = stored->filter_profile;
+            CHECK( index.maximum_for( key ) >= stored->thresholds[i].threshold );
+        }
+    }
+
+    const crafting_apparent_overlap_guard *survivor_scope =
+        index.apparent_overlap_guard_for( recipe_id( "survivor_scope" ) );
+    REQUIRE( survivor_scope != nullptr );
+    REQUIRE( survivor_scope->known );
+    const auto lens = std::find_if(
+                          survivor_scope->thresholds.begin(), survivor_scope->thresholds.end(),
+    []( const crafting_requirement_option & option ) {
+        return option.id == "lens";
+    } );
+    REQUIRE( lens != survivor_scope->thresholds.end() );
+    CHECK( lens->kind == fact_kind::component_units );
+    CHECK( lens->threshold == 2 );
 }
 
 TEST_CASE( "requirement_index_loaded_dictionary_fact_table_invariants", "[crafting]" )
@@ -2051,4 +2180,51 @@ TEST_CASE( "phase3c_result_cache_boundaries", "[crafting][requirement_index]" )
         CHECK( cache.evaluate( rid( "p3c_exact" ), menu_mode::normal ) ==
                crafting_requirement_result::unknown );
     }
+}
+
+TEST_CASE( "phase3c_apparent_craftability_guard_uses_capped_inventory",
+           "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.emplace_back();
+
+    const recipe_id no_overlap = rid( "apparent_no_overlap" );
+    const recipe_id unit_overlap = rid( "apparent_unit_overlap" );
+    const recipe_id charge_overlap = rid( "apparent_charge_overlap" );
+    const recipe_id unknown_guard = rid( "apparent_unknown_guard" );
+    for( const recipe_id &id : {
+             no_overlap, unit_overlap, charge_overlap, unknown_guard
+         } ) {
+        REQUIRE( index.add_recipe( id, plan, uniform_profiles( recipe_filter_none ) ) );
+    }
+    REQUIRE( index.set_apparent_overlap_guard( no_overlap, {}, recipe_filter_none ) );
+    REQUIRE( index.set_apparent_overlap_guard(
+                 unit_overlap, { make_option( "stick", 2 ) }, recipe_filter_none ) );
+    REQUIRE( index.set_apparent_overlap_guard(
+                 charge_overlap,
+    { make_option( "rock", 12, fact_kind::component_charges ) },
+    recipe_filter_none ) );
+    index.finalize();
+
+    inventory scarce = make_stick_inventory( 1 );
+    item scarce_rock( itype_id( "rock" ) );
+    scarce_rock.charges = 11;
+    scarce.add_item( scarce_rock );
+    const crafting_inventory_snapshot scarce_snapshot( index, scarce );
+    const crafting_requirement_result_cache scarce_cache( index, scarce_snapshot );
+    CHECK_FALSE( scarce_cache.apparent_craftability_needs_legacy_check( no_overlap ) );
+    CHECK( scarce_cache.apparent_craftability_needs_legacy_check( unit_overlap ) );
+    CHECK( scarce_cache.apparent_craftability_needs_legacy_check( charge_overlap ) );
+    CHECK( scarce_cache.apparent_craftability_needs_legacy_check( unknown_guard ) );
+    CHECK( scarce_cache.apparent_craftability_needs_legacy_check( rid( "missing" ) ) );
+
+    inventory sufficient = make_stick_inventory( 2000 );
+    item sufficient_rock( itype_id( "rock" ) );
+    sufficient_rock.charges = 12000;
+    sufficient.add_item( sufficient_rock );
+    const crafting_inventory_snapshot sufficient_snapshot( index, sufficient );
+    const crafting_requirement_result_cache sufficient_cache( index, sufficient_snapshot );
+    CHECK_FALSE( sufficient_cache.apparent_craftability_needs_legacy_check( unit_overlap ) );
+    CHECK_FALSE( sufficient_cache.apparent_craftability_needs_legacy_check( charge_overlap ) );
 }

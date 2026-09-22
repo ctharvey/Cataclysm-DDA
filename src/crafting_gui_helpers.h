@@ -41,7 +41,6 @@ struct availability {
         bool would_use_rotten;
         bool would_use_favorite;
         bool useless_practice;
-        bool apparently_craftable;
         bool has_proficiencies;
         bool has_all_skills;
         bool is_nested_category;
@@ -55,6 +54,9 @@ struct availability {
         mutable float proficiency_skill_maluses = -1.0f;
         mutable float max_proficiency_skill_maluses = -1.0f;
         mutable std::optional<book_proficiency_bonuses> cached_book_bonuses;
+        mutable std::optional<bool> apparently_craftable_;
+        int batch_size_ = 1;
+        bool camp_crafting_ = false;
         const book_proficiency_bonuses &get_book_bonuses() const;
     public:
         float get_proficiency_time_maluses() const;
@@ -64,6 +66,12 @@ struct availability {
 
         nc_color selected_color() const;
         nc_color color( bool ignore_missing_skills = false ) const;
+
+        // Computes the overlapping-component explanation only on first use.
+        // Normal menu list construction never needs this value; only the
+        // selected recipe's information panel does.
+        bool is_apparently_craftable() const;
+        bool apparent_craftability_is_known() const;
 
         static bool check_can_craft_nested( Character &_crafter, const recipe &r,
                                             const crafting_requirement_result_cache *requirement_cache = nullptr );

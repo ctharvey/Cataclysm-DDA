@@ -125,7 +125,7 @@ float availability::get_max_proficiency_skill_maluses() const
 availability::availability( Character &_crafter, const recipe *recp, int batch_size,
                             bool camp_crafting, inventory *inventory_override,
                             const crafting_requirement_result_cache *requirement_cache ) :
-    crafter( _crafter )
+    crafter( _crafter ), batch_size_( batch_size ), camp_crafting_( camp_crafting )
 {
     rec = recp;
     inv_override = inventory_override;
@@ -240,20 +240,30 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
         }
     }
 
-    apparently_craftable = false;
+    apparently_craftable_ = false;
 
     if( !can_craft_recipe &&
         !is_nested &&
         !npc_cannot_craft &&
         character_base_requirements ) {
-
-        const auto all_items_filter = recp->get_component_filter( recipe_filter_flags::none );
-
-        apparently_craftable =
-            recp->simple_requirements().can_make_with_inventory(
-                &crafter, inv, all_items_filter,
-                batch_size, flag
-            );
+        const bool can_use_apparent_guard =
+            requirement_cache != nullptr &&
+            !camp_crafting &&
+            batch_size == 1;
+        if( can_use_apparent_guard ) {
+            if( requirement_cache->apparent_craftability_needs_legacy_check( recp->ident() ) ) {
+                // The precise diagnostic is not list state. Defer it until the
+                // selected recipe's information panel asks for the warning.
+                apparently_craftable_.reset();
+            }
+        } else {
+            const auto all_items_filter = recp->get_component_filter( recipe_filter_flags::none );
+            apparently_craftable_ =
+                recp->simple_requirements().can_make_with_inventory(
+                    &crafter, inv, all_items_filter,
+                    batch_size, flag
+                );
+        }
     }
 
     useless_practice = is_practice && cannot_gain_skill_or_prof( crafter, *recp );
@@ -266,6 +276,25 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
             break;
         }
     }
+}
+
+bool availability::is_apparently_craftable() const
+{
+    if( apparently_craftable_ ) {
+        return *apparently_craftable_;
+    }
+
+    const inventory &inv = camp_crafting_ ? *inv_override : crafter.crafting_inventory();
+    const craft_flags flag = camp_crafting_ ? craft_flags::none : craft_flags::start_only;
+    const auto all_items_filter = rec->get_component_filter( recipe_filter_flags::none );
+    apparently_craftable_ = rec->simple_requirements().can_make_with_inventory(
+                                &crafter, inv, all_items_filter, batch_size_, flag );
+    return *apparently_craftable_;
+}
+
+bool availability::apparent_craftability_is_known() const
+{
+    return apparently_craftable_.has_value();
 }
 
 nc_color availability::selected_color() const
@@ -501,7 +530,7 @@ std::vector<std::string> recipe_info(
     }
     std::string reason;
     bool npc_cant = avail.crafter.is_npc() && !recp.npc_can_craft( reason ) && !avail.inv_override ;
-    if( !can_craft_this && avail.apparently_craftable && !recp.is_nested() && !npc_cant ) {
+    if( !can_craft_this && avail.is_apparently_craftable() && !recp.is_nested() && !npc_cant ) {
         oss << _( "<color_red>Cannot be crafted because the same item is needed "
                   "for multiple components.</color>\n" );
     }

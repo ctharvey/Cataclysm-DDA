@@ -1,11 +1,66 @@
 #include "crafting_requirement_index.h"
 
 #include <algorithm>
+#include <climits>
 
 #include "flag.h"
 #include "inventory.h"
 #include "item.h"
 #include "itype.h"
+#include "requirements.h"
+
+std::optional<std::vector<crafting_requirement_option>> make_apparent_overlap_guard(
+            const requirement_data &requirements )
+{
+    using overlap_key = std::pair<crafting_requirement_fact_kind, std::string>;
+    struct overlap_total {
+        int group_count = 0;
+        long long threshold = 0;
+    };
+
+    std::map<overlap_key, overlap_total> totals;
+    for( const std::vector<item_comp> &group : requirements.get_components() ) {
+        std::map<overlap_key, int> group_maxima;
+        for( const item_comp &component : group ) {
+            if( component.type.is_null() || !item::type_is_defined( component.type ) ||
+                component.count == 0 || component.count == INT_MIN ||
+                component.type.str() == "any" ) {
+                return std::nullopt;
+            }
+            const crafting_requirement_fact_kind kind =
+                item::count_by_charges( component.type )
+                ? crafting_requirement_fact_kind::component_charges
+                : crafting_requirement_fact_kind::component_units;
+            const overlap_key key{ kind, component.type.str() };
+            const int count = component.count < 0 ? -component.count : component.count;
+            auto inserted = group_maxima.emplace( key, count );
+            if( !inserted.second ) {
+                inserted.first->second = std::max( inserted.first->second, count );
+            }
+        }
+        for( const auto &entry : group_maxima ) {
+            overlap_total &total = totals[entry.first];
+            ++total.group_count;
+            total.threshold += entry.second;
+            if( total.threshold > INT_MAX ) {
+                return std::nullopt;
+            }
+        }
+    }
+
+    std::vector<crafting_requirement_option> guard;
+    for( const auto &entry : totals ) {
+        if( entry.second.group_count < 2 ) {
+            continue;
+        }
+        crafting_requirement_option threshold;
+        threshold.kind = entry.first.first;
+        threshold.id = entry.first.second;
+        threshold.threshold = static_cast<int>( entry.second.threshold );
+        guard.push_back( threshold );
+    }
+    return guard;
+}
 
 crafting_inventory_snapshot::crafting_inventory_snapshot(
     const crafting_requirement_index &index, const inventory &inv )
@@ -462,6 +517,63 @@ bool crafting_requirement_index::add_unsupported_recipe(
     return true;
 }
 
+bool crafting_requirement_index::set_apparent_overlap_guard(
+    const recipe_id &recipe_id,
+    const std::vector<crafting_requirement_option> &thresholds,
+    int effective_filter_profile,
+    std::string *error )
+{
+    const auto fail = [&]( const std::string & msg ) {
+        if( error ) {
+            *error = msg;
+        }
+        return false;
+    };
+    if( finalized_ ) {
+        return fail( "index is finalized" );
+    }
+    auto recipe_it = recipes_.find( recipe_id );
+    if( recipe_it == recipes_.end() ) {
+        return fail( "unknown recipe id" );
+    }
+    if( recipe_it->second.apparent_overlap.known ) {
+        return fail( "apparent overlap guard already set" );
+    }
+
+    std::set<crafting_requirement_fact_key> seen;
+    std::vector<crafting_requirement_fact_key> staged_keys;
+    staged_keys.reserve( thresholds.size() );
+    for( const crafting_requirement_option &opt : thresholds ) {
+        if( opt.kind != crafting_requirement_fact_kind::component_units &&
+            opt.kind != crafting_requirement_fact_kind::component_charges ) {
+            return fail( "apparent overlap guard requires component facts" );
+        }
+        if( opt.id.empty() || opt.id == "any" ) {
+            return fail( "apparent overlap guard has unsupported item id" );
+        }
+        if( opt.level != 0 || opt.threshold <= 0 ) {
+            return fail( "apparent overlap guard has invalid threshold" );
+        }
+        const crafting_requirement_fact_key key = derive_key( opt, effective_filter_profile );
+        if( !seen.insert( key ).second ) {
+            return fail( "duplicate apparent overlap fact" );
+        }
+        staged_keys.push_back( key );
+    }
+
+    crafting_apparent_overlap_guard &guard = recipe_it->second.apparent_overlap;
+    guard.known = true;
+    guard.filter_profile = effective_filter_profile;
+    guard.thresholds = thresholds;
+    for( std::size_t i = 0; i < thresholds.size(); ++i ) {
+        thresholds_[staged_keys[i]].push_back( thresholds[i].threshold );
+    }
+    if( error ) {
+        error->clear();
+    }
+    return true;
+}
+
 void crafting_requirement_index::finalize()
 {
     if( finalized_ ) {
@@ -550,6 +662,13 @@ const crafting_requirement_plan *crafting_requirement_index::plan_for(
         return nullptr;
     }
     return &record.plan;
+}
+
+const crafting_apparent_overlap_guard *crafting_requirement_index::apparent_overlap_guard_for(
+    const recipe_id &recipe_id ) const
+{
+    auto it = recipes_.find( recipe_id );
+    return it == recipes_.end() ? nullptr : &it->second.apparent_overlap;
 }
 
 int crafting_requirement_index::effective_profile_for(
@@ -791,6 +910,26 @@ crafting_requirement_result crafting_requirement_evaluator::evaluate(
     return result;
 }
 
+bool crafting_requirement_evaluator::apparent_craftability_needs_legacy_check(
+    const recipe_id &recipe_id ) const
+{
+    if( !index_.is_finalized() ) {
+        return true;
+    }
+    const crafting_apparent_overlap_guard *guard =
+        index_.apparent_overlap_guard_for( recipe_id );
+    if( guard == nullptr || !guard->known ) {
+        return true;
+    }
+    for( const crafting_requirement_option &opt : guard->thresholds ) {
+        const crafting_requirement_fact_key key = derive_key( opt, guard->filter_profile );
+        if( !snapshot_.is_exact( key ) || !snapshot_.meets( key, opt.threshold ) ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3C: production-only bulk result cache.
 // ---------------------------------------------------------------------------
@@ -813,7 +952,10 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
     };
     std::map<recipe_id, std::array<plan_state, menu_filter_mode_count>> states;
     const std::vector<recipe_id> ids = index.recipe_ids();
+    const crafting_requirement_evaluator evaluator( index, snapshot );
     for( const recipe_id &id : ids ) {
+        apparent_legacy_needed_.emplace(
+            id, evaluator.apparent_craftability_needs_legacy_check( id ) );
         const crafting_requirement_plan *plan = index.plan_for( id );
         if( plan == nullptr || plan->alternatives.empty() ) {
             continue;
@@ -944,6 +1086,13 @@ crafting_requirement_result crafting_requirement_result_cache::evaluate(
         return crafting_requirement_result::unknown;
     }
     return it->second[static_cast<std::size_t>( menu_index )];
+}
+
+bool crafting_requirement_result_cache::apparent_craftability_needs_legacy_check(
+    const recipe_id &recipe_id ) const
+{
+    auto it = apparent_legacy_needed_.find( recipe_id );
+    return it == apparent_legacy_needed_.end() || it->second;
 }
 
 std::size_t crafting_requirement_result_cache::cached_recipe_count() const
