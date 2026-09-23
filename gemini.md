@@ -1,4 +1,4 @@
-# Cataclysm-DDA-glm53flash-eval - Gemini Instructions
+# Cataclysm-DDA-crafting-eval - Gemini Instructions
 
 Before performing any tasks, research, or code modifications, you **MUST** read the contents of the [`.agent/`](.agent/) directory.
 

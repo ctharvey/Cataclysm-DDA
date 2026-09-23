@@ -1,4 +1,9 @@
-# Changelog — Cataclysm-DDA-glm53flash-eval
+# Changelog — Cataclysm-DDA-crafting-eval
+
+## 2026-09-23 — Remove the model name from the project
+
+- Renamed the linked worktree and project identity to `Cataclysm-DDA-crafting-eval`.
+- Kept the existing evaluation branch and remote branch unchanged.
 
 ## 2026-09-22 — Finish local scaffold without Menhir
 

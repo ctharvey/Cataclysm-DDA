@@ -1,4 +1,4 @@
-# Cataclysm-DDA-glm53flash-eval - Qwen Instructions
+# Cataclysm-DDA-crafting-eval - Qwen Instructions
 
 Before performing any tasks, research, or code modifications, you **MUST** read the contents of the [`.agent/`](.agent/) directory.
 

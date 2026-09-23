@@ -1,4 +1,4 @@
-# Code Conventions — Cataclysm-DDA-glm53flash-eval
+# Code Conventions — Cataclysm-DDA-crafting-eval
 
 ## Style
 

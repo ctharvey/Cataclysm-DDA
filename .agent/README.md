@@ -1,4 +1,4 @@
-# Cataclysm-DDA-glm53flash-eval — Agent Docs
+# Cataclysm-DDA-crafting-eval — Agent Docs
 
 This is the agent entry point for the crafting-menu performance evaluation worktree. Read this
 file first, then open only the project documents relevant to the task.
@@ -16,7 +16,7 @@ file first, then open only the project documents relevant to the task.
 
 - Repository: `ctharvey/Cataclysm-DDA`, with `CleverRaven/Cataclysm-DDA` as `upstream`.
 - This checkout is a linked Git worktree at
-  `C:\Users\thron\IdeaProjects\projects\forked\Cataclysm-DDA-glm53flash-eval`.
+  `C:\Users\thron\IdeaProjects\projects\forked\Cataclysm-DDA-crafting-eval`.
 - Its intended branch is `eval/glm-5.3-flash-crafting-index-20260908`; do not switch this worktree
   to another branch.
 - Upstream's default branch is `master`. Make changes on feature/evaluation branches and do not
