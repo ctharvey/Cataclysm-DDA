@@ -11,9 +11,12 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -1513,4 +1516,43 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
           << "cached warm expanded list+sort: " << warm_expanded_ms << " ms"
           << " roots=" << nested_root_count << " entries=" << expanded_entry_count
           << " added_probe=" << added_nested_probe );
+
+    std::ostringstream harness_report;
+    harness_report << std::fixed << std::setprecision( 3 )
+                   << "{\"schema_version\":1"
+                   << ",\"recipe_source\":\""
+                   << ( used_armor_category ? "CC_ARMOR" : "all_available_fallback" ) << "\""
+                   << ",\"source_items\":{\"carried\":" << carried_item_count
+                   << ",\"map\":" << map_item_count
+                   << ",\"vehicle\":" << vehicle_item_count << "}"
+                   << ",\"recipes\":{\"picking\":" << picking.size()
+                   << ",\"available\":" << available_recipes.size()
+                   << ",\"expanded_entries\":" << expanded_entry_count << "}"
+                   << ",\"snapshot\":{\"facts\":" << prepared_snapshot.fact_count()
+                   << ",\"saturated\":" << prepared_snapshot.saturated_fact_count()
+                   << ",\"inexact\":" << prepared_snapshot.inexact_fact_count()
+                   << ",\"unsupported\":" << prepared_snapshot.unsupported_fact_count() << "}"
+                   << ",\"graph\":{\"normal\":[" << graph_satisfied[0] << ','
+                   << graph_unsatisfied[0] << ',' << graph_unknown[0] << ']'
+                   << ",\"no_rotten\":[" << graph_satisfied[1] << ','
+                   << graph_unsatisfied[1] << ',' << graph_unknown[1] << ']'
+                   << ",\"no_favorite\":[" << graph_satisfied[2] << ','
+                   << graph_unsatisfied[2] << ',' << graph_unknown[2] << "]}"
+                   << ",\"bypass\":{\"unsupported_recipes\":" << unsupported_recipe_count
+                   << ",\"nested\":" << nested_bypass_count
+                   << ",\"tool_charges\":" << tool_charge_bypass_count
+                   << ",\"apparent_candidates\":" << apparent_check_candidates
+                   << ",\"apparent_legacy_fallbacks\":"
+                   << apparent_legacy_fallback_candidates << "}"
+                   << ",\"timings_ms\":{\"inventory_assembly\":" << inventory_assembly_ms
+                   << ",\"recipe_discovery\":" << recipe_discovery_ms
+                   << ",\"snapshot\":" << snapshot_ms
+                   << ",\"result_cache\":" << result_cache_ms
+                   << ",\"legacy_cold_sorted\":" << legacy_cold_sorted_ms
+                   << ",\"cached_cold_unsorted\":" << cached_cold_availability_ms
+                   << ",\"cached_cold_sorted\":" << cached_cold_sorted_ms
+                   << ",\"cached_warm_unsorted\":" << warm_unsorted_ms
+                   << ",\"cached_warm_sorted\":" << warm_sorted_ms
+                   << ",\"cached_warm_expanded\":" << warm_expanded_ms << "}}";
+    std::cout << "CRAFTING_HARNESS_JSON=" << harness_report.str() << '\n';
 }
