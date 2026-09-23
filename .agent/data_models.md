@@ -17,6 +17,12 @@ Branch-specific model:
 - `crafting_requirement_index`: derives lookup keys from recipe requirements and maps changed
   inventory capabilities to candidate recipes. It is an acceleration structure; final
   craftability remains authoritative in the existing crafting checks.
+- Charged-tool requirement options retain both the full charge threshold and the batch-one
+  `start_only` threshold. The result cache stores both outcomes; inexact facts return `unknown`
+  so the crafting menu uses the legacy requirement check.
+- Stored digital items and same-type nested containers mark their item facts inexact to preserve
+  legacy binned-query behavior. Fault-broken items remain eligible for unit counts, while charge
+  counts reject both faults and the explicit broken flag, matching the legacy queries.
 
 ## DTOs
 

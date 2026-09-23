@@ -10,6 +10,7 @@
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_catch.h"
+#include "cata_scope_helpers.h"
 #include "character.h"
 #include "character_attire.h"
 #include "color.h"
@@ -1282,6 +1283,55 @@ TEST_CASE( "build_recipe_list_sort_craftable_first", "[crafting][gui][recipe_lis
             CHECK_FALSE( seen_uncraftable );
         }
     }
+}
+
+TEST_CASE( "build_recipe_list_caches_unexpanded_nested_children",
+           "[crafting][gui][recipe_list]" )
+{
+    clear_recipe_ui_state();
+    Character &guy = setup_character();
+    guy.set_skill_level( skill_fabrication, 2 );
+    guy.set_skill_level( skill_melee, 1 );
+
+    const recipe *nested = &recipe_test_nested_weapons.obj();
+    const recipe *cudgel = &recipe_cudgel_test_no_tools.obj();
+    recipe_subset available = make_subset( { nested, cudgel } );
+    std::map<const recipe *, availability> cache;
+
+    recipe_list_data nested_result = build_recipe_list( { nested }, false, false,
+                                     guy, false, nullptr, false, false, cache, available );
+
+    CHECK( nested_result.entries.size() == 1 );
+    CHECK( cache.count( nested ) == 1 );
+    CHECK( cache.count( cudgel ) == 1 );
+    const availability *cached_child = &cache.at( cudgel );
+    const size_t cached_recipe_count = cache.size();
+
+    recipe_list_data child_result = build_recipe_list( { cudgel }, false, false,
+                                    guy, false, nullptr, false, false, cache, available );
+
+    CHECK( child_result.entries.size() == 1 );
+    CHECK( cache.size() == cached_recipe_count );
+    CHECK( &cache.at( cudgel ) == cached_child );
+}
+
+TEST_CASE( "build_recipe_list_stops_nested_cycles", "[crafting][gui][recipe_list]" )
+{
+    clear_recipe_ui_state();
+    Character &guy = setup_character();
+    recipe &nested = const_cast<recipe &>( recipe_test_nested_weapons.obj() );
+    restore_on_out_of_scope restore_nested_children( nested.nested_category_data );
+    nested.nested_category_data.clear();
+    nested.nested_category_data.insert( nested.ident() );
+
+    std::map<const recipe *, availability> cache;
+    recipe_subset available = make_subset( { &nested } );
+    recipe_list_data result = build_recipe_list( { &nested }, false, false,
+                              guy, false, nullptr, false, false, cache, available );
+
+    CHECK( result.entries.size() == 1 );
+    CHECK( cache.size() == 1 );
+    CHECK_FALSE( cache.at( &nested ).can_craft_recipe );
 }
 
 TEST_CASE( "build_recipe_list_expands_nested", "[crafting][gui][recipe_list]" )
