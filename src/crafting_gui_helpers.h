@@ -23,6 +23,8 @@ class recipe_subset;
 struct crafting_cost_context;
 struct tool_comp;
 
+using nested_availability_resolver = std::function<bool( const recipe * )>;
+
 // Returns true if the character cannot gain any skill or proficiency from this recipe.
 // Used to mark practice recipes as "useless" when the crafter already exceeds
 // the recipe's skill cap and has all used proficiencies.
@@ -34,6 +36,10 @@ struct availability {
         explicit availability( Character &_crafter, const recipe *recp, int batch_size = 1,
                                bool camp_crafting = false, inventory *inventory_override = nullptr,
                                const crafting_requirement_result_cache *requirement_cache = nullptr );
+        availability( Character &_crafter, const recipe *recp, int batch_size,
+                      bool camp_crafting, inventory *inventory_override,
+                      const crafting_requirement_result_cache *requirement_cache,
+                      const nested_availability_resolver *nested_resolver );
         Character &crafter;
         bool can_craft_recipe;
         // group can introduce recipe this crafter cannot craft because of low primary skill
@@ -75,6 +81,9 @@ struct availability {
 
         static bool check_can_craft_nested( Character &_crafter, const recipe &r,
                                             const crafting_requirement_result_cache *requirement_cache = nullptr );
+        static bool check_can_craft_nested( Character &_crafter, const recipe &r,
+                                            const crafting_requirement_result_cache *requirement_cache,
+                                            const nested_availability_resolver *nested_resolver );
 };
 
 enum class craft_confirm_result {
@@ -160,7 +169,7 @@ struct recipe_list_data {
 
 // Processes a raw recipe list from category lookup or filter:
 // 1. Filters out hidden recipes (unless skip_hidden_filter is true)
-// 2. Caches availability for each recipe in the provided cache
+// 2. Caches each direct or nested recipe's availability once in normal list builds
 // 3. Sorts by craftability, difficulty, name (skipped when skip_sort is true)
 // 4. Expands nested recipe categories
 // 5. Builds the parallel availability vector

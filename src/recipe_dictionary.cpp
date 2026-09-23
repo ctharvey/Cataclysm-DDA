@@ -128,6 +128,9 @@ bool translate_requirement_alternative( const requirement_data &alt,
                 }
                 opt.kind = crafting_requirement_fact_kind::tool_charges;
                 opt.threshold = static_cast<int>( threshold );
+                opt.start_only_threshold = tool_type->tool
+                                           ? std::min( opt.threshold, opt.threshold / 20 + 19 )
+                                           : opt.threshold;
             } else {
                 if( tc.count == 0 || tc.count == INT_MIN ) {
                     return fail( "tool with nonpositive or unrepresentable count" );

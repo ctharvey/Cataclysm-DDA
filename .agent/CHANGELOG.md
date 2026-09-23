@@ -1,5 +1,28 @@
 # Changelog — Cataclysm-DDA-crafting-eval
 
+## 2026-09-23 — Preserve legacy inventory query behavior
+
+- `src/crafting_requirement_index.*`: fall back for stored digital items and same-type nested
+  containers; distinguish broken-item flags from faults for unit and charge counts.
+- `tests/crafting_requirement_index_test.cpp`: cover stored software/books, damaged devices,
+  nested containers, and legacy full-charge and craft-start evaluation.
+- `.agent/data_models.md`: document the additional conservative snapshot cases.
+
+## 2026-09-23 — Cache exact craft-start tool charges
+
+- Added craft-start charge thresholds to indexed recipe options and cached results, preserving
+  the existing full-charge evaluation for other callers.
+- Routed batch-one crafting-menu availability through the craft-start result, with legacy fallback
+  for inexact charge sources including UPS aliases and connected power.
+- Extended requirement-index equivalence and boundary tests and updated Armor harness bypass
+  reporting to count only actual tool-charge fallbacks.
+
+## 2026-09-23 — Reuse nested recipe availability
+
+- Routed normal crafting-list entries and nested expansion through one shared availability resolver.
+- Added cycle protection and retained the existing constructor ABI for unchanged callers.
+- Added focused coverage proving an unexpanded nested child is cached and reused by later list builds.
+
 ## 2026-09-23 — Emulate the fresh-process Armor workflow
 
 - Changed the crafting harness to run the Armor pipeline in three independent test processes.

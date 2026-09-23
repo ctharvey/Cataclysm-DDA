@@ -90,6 +90,9 @@ struct crafting_requirement_option {
     std::string id;
     int level = 0;
     int threshold = 0;
+    // Batch-one craft start threshold for charged tools. Zero means the
+    // normal threshold also applies to craft starts.
+    int start_only_threshold = 0;
 };
 
 // An OR set of options within a group.
@@ -139,6 +142,7 @@ struct crafting_requirement_edge {
     int group = 0;
     int option = 0;
     int threshold = 0;
+    int start_only_threshold = 0;
 
     bool operator==( const crafting_requirement_edge &rhs ) const;
     bool operator!=( const crafting_requirement_edge &rhs ) const;
@@ -328,8 +332,9 @@ class crafting_inventory_snapshot
         // whose legacy resolution can depend on charged/contained quality
         // semantics and player state, and for tool_charges facts whose
         // contributing tools can consult external pools (UPS, bionic
-        // power, multimag firing requirements); those retain only the
-        // local charge sum.
+        // power, linked vehicle power, multimag firing requirements);
+        // those retain only the local charge sum. Stored digital items and
+        // same-type nested items also require legacy binned-query fallback.
         bool is_exact( const crafting_requirement_fact_key &key ) const;
 
         // Number of tracked facts marked inexact.
@@ -384,6 +389,11 @@ class crafting_requirement_evaluator
         crafting_requirement_result evaluate( const recipe_id &recipe_id,
                                               menu_filter_mode menu ) const;
 
+        // Evaluates the same plan using batch-one craft-start charge
+        // thresholds. Inexact charge sources still resolve to unknown.
+        crafting_requirement_result evaluate_start_only(
+            const recipe_id &recipe_id, menu_filter_mode menu ) const;
+
         // True when the snapshot cannot rule out a simple-vs-exact component
         // allocation mismatch. False is a proof that apparently_craftable
         // cannot be true; true must be resolved by the legacy simple check if
@@ -392,16 +402,20 @@ class crafting_requirement_evaluator
             const recipe_id &recipe_id ) const;
 
     private:
+        crafting_requirement_result evaluate_impl(
+            const recipe_id &recipe_id, menu_filter_mode menu,
+            bool start_only ) const;
+
         const crafting_requirement_index &index_;
         const crafting_inventory_snapshot &snapshot_;
 };
 
 // Phase 3C: production-only bulk result cache.
 //
-// Precomputes, at construction time, the tri-state evaluation result of
-// every retained recipe under every menu filter mode, exactly as the
-// Phase 3A direct evaluator would produce it (the direct evaluator remains
-// the oracle/fallback for anything this cache reports as `unknown`).
+// Precomputes, at construction time, the full-charge and craft-start tri-state
+// results of every retained recipe under every menu filter mode, exactly as
+// the Phase 3A direct evaluator would produce them (the direct evaluator
+// remains the oracle/fallback for anything this cache reports as `unknown`).
 //
 // Pointer-free: the constructor reads the index and snapshot once and
 // stores only values; no references or pointers to either object survive
@@ -420,6 +434,9 @@ class crafting_requirement_result_cache
         crafting_requirement_result evaluate( const recipe_id &recipe_id,
                                               menu_filter_mode menu ) const;
 
+        crafting_requirement_result evaluate_start_only(
+            const recipe_id &recipe_id, menu_filter_mode menu ) const;
+
         bool apparent_craftability_needs_legacy_check(
             const recipe_id &recipe_id ) const;
 
@@ -428,6 +445,8 @@ class crafting_requirement_result_cache
 
     private:
         std::map<recipe_id, std::array<crafting_requirement_result, menu_filter_mode_count>> results_;
+        std::map<recipe_id, std::array<crafting_requirement_result, menu_filter_mode_count>>
+                start_only_results_;
         std::map<recipe_id, bool> apparent_legacy_needed_;
 };
 

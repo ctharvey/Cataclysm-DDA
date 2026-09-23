@@ -6,6 +6,7 @@
 #include "flag.h"
 #include "inventory.h"
 #include "item.h"
+#include "item_contents.h"
 #include "itype.h"
 #include "requirements.h"
 
@@ -85,6 +86,13 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
                 quality_facts[key.id].push_back( key );
                 break;
         }
+        // Legacy charges_of( UPS ) also accepts tools with IS_UPS under
+        // other item ids, so an id-only snapshot cannot prove this fact.
+        if( key.kind == crafting_requirement_fact_kind::tool_charges &&
+            key.id == "UPS" ) {
+            inexact_keys_.insert( key );
+            unsupported_keys_.insert( key );
+        }
     }
     // Quality facts cannot be reproduced exactly: item::get_quality()
     // mirrors charged/contained quality resolution only in limited cases
@@ -95,9 +103,8 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
         }
     }
 
-    // Eligibility under one filter profile bitmask. Broken items are
-    // rejected for all item/tool facts, matching legacy amount_of /
-    // charges_of. Per-item property checks run once and produce a compact
+    // Eligibility under one filter profile bitmask. Per-item property
+    // checks run once and produce a compact
     // rejection bitmask; a fact is eligible iff its profile avoids every
     // rejected bit. Non-magazines are never rejected by the full-magazine
     // rule.
@@ -123,12 +130,42 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
         return mask;
     };
 
-    inv.visit_items( [&]( item * e, item * ) {
+    const auto mark_item_inexact = [&]( const itype_id & id ) {
+        const auto facts = item_facts.find( id.str() );
+        if( facts != item_facts.end() ) {
+            inexact_keys_.insert( facts->second.begin(), facts->second.end() );
+        }
+    };
+    std::vector<const item *> ancestors;
+    inv.visit_items( [&]( item * e, item * parent ) {
         const item &it = *e;
-        if( it.is_broken() ) {
-            // Broken items match nothing item- or tool-related.
+        while( !ancestors.empty() && ancestors.back() != parent ) {
+            ancestors.pop_back();
+        }
+        // Legacy binned queries revisit descendants of the same type.
+        // Preserve that behavior through fallback, without rescanning contents.
+        if( std::any_of( ancestors.begin(), ancestors.end(), [&]( const item * ancestor ) {
+        return ancestor->typeId() == it.typeId();
+        } ) ) {
+            mark_item_inexact( it.typeId() );
+        }
+        ancestors.push_back( e );
+
+        // get_binned_items exposes digital items outside CONTAINER pockets.
+        // Match its visibility rules, including software on broken devices.
+        for( const item *software : it.softwares() ) {
+            mark_item_inexact( software->typeId() );
+        }
+        if( it.is_estorage() && !it.is_broken_on_active() ) {
+            for( const item *book : it.get_contents().ebooks() ) {
+                mark_item_inexact( book->typeId() );
+            }
+        }
+        // amount_of rejects the item flag, whereas charges_of also rejects faults.
+        if( it.has_flag( flag_ITEM_BROKEN ) ) {
             return VisitResponse::NEXT;
         }
+        const bool broken = it.is_broken();
         const itype_id id = it.typeId();
         const bool pseudo = it.has_flag( flag_PSEUDO );
         const bool by_charges = it.count_by_charges();
@@ -175,11 +212,14 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
                     case crafting_requirement_fact_kind::component_charges:
                         // Pseudo excluded like component units; only
                         // count-by-charges items contribute their charges.
-                        if( !pseudo && component_eligible && by_charges ) {
+                        if( !broken && !pseudo && component_eligible && by_charges ) {
                             capped_add( key, it.charges, maximum );
                         }
                         break;
                     case crafting_requirement_fact_kind::tool_charges: {
+                        if( broken ) {
+                            break;
+                        }
                         // Local exact charges only: no linked, UPS, or
                         // bionic pools are consulted. Tools whose legacy
                         // count drains external pools (UPS, bionic power,
@@ -189,7 +229,8 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
                             capped_add( key, it.charges, maximum );
                         } else {
                             capped_add( key, it.ammo_remaining(), maximum );
-                            if( it.has_flag( flag_USE_UPS ) ||
+                            if( it.has_link_data() ||
+                                it.has_flag( flag_USE_UPS ) ||
                                 it.has_flag( flag_USES_BIONIC_POWER ) ||
                                 it.uses_firing_requirements() ) {
                                 inexact_keys_.insert( key );
@@ -204,7 +245,7 @@ crafting_inventory_snapshot::crafting_inventory_snapshot(
             }
         }
 
-        if( !quality_facts.empty() ) {
+        if( !broken && !quality_facts.empty() ) {
             for( const auto &entry : quality_facts ) {
                 const quality_id qual( entry.first );
                 const int supplied = it.get_quality( qual );
@@ -320,7 +361,8 @@ bool crafting_requirement_edge::operator==(
            group_kind == rhs.group_kind &&
            group == rhs.group &&
            option == rhs.option &&
-           threshold == rhs.threshold;
+           threshold == rhs.threshold &&
+           start_only_threshold == rhs.start_only_threshold;
 }
 
 bool crafting_requirement_edge::operator!=(
@@ -350,7 +392,10 @@ bool crafting_requirement_edge::operator<(
     if( option != rhs.option ) {
         return option < rhs.option;
     }
-    return threshold < rhs.threshold;
+    if( threshold != rhs.threshold ) {
+        return threshold < rhs.threshold;
+    }
+    return start_only_threshold < rhs.start_only_threshold;
 }
 
 namespace
@@ -445,6 +490,12 @@ bool crafting_requirement_index::add_recipe(
                 if( opt.threshold <= 0 ) {
                     return fail( "nonpositive threshold" );
                 }
+                if( opt.start_only_threshold < 0 ||
+                    ( opt.start_only_threshold > 0 &&
+                      ( opt.kind != crafting_requirement_fact_kind::tool_charges ||
+                        opt.start_only_threshold > opt.threshold ) ) ) {
+                    return fail( "invalid craft-start threshold" );
+                }
                 if( !kind_matches_group( grp.kind, opt.kind ) ) {
                     return fail( "option kind does not match group kind" );
                 }
@@ -465,6 +516,9 @@ bool crafting_requirement_index::add_recipe(
                     edge.group = static_cast<int>( g );
                     edge.option = static_cast<int>( o );
                     edge.threshold = opt.threshold;
+                    edge.start_only_threshold = opt.start_only_threshold > 0
+                                                ? opt.start_only_threshold
+                                                : opt.threshold;
                     staged_edges.push_back( { key, edge } );
                 }
             }
@@ -845,6 +899,18 @@ crafting_requirement_evaluator::crafting_requirement_evaluator(
 crafting_requirement_result crafting_requirement_evaluator::evaluate(
     const recipe_id &recipe_id, menu_filter_mode menu ) const
 {
+    return evaluate_impl( recipe_id, menu, false );
+}
+
+crafting_requirement_result crafting_requirement_evaluator::evaluate_start_only(
+    const recipe_id &recipe_id, menu_filter_mode menu ) const
+{
+    return evaluate_impl( recipe_id, menu, true );
+}
+
+crafting_requirement_result crafting_requirement_evaluator::evaluate_impl(
+    const recipe_id &recipe_id, menu_filter_mode menu, bool start_only ) const
+{
     const int menu_index = static_cast<int>( menu );
     if( menu_index < 0 || menu_index >= menu_filter_mode_count ) {
         return crafting_requirement_result::unknown;
@@ -887,8 +953,11 @@ crafting_requirement_result crafting_requirement_evaluator::evaluate(
                         group_result = or_reduce( group_result,
                                                   crafting_requirement_result::unknown );
                     } else {
+                        const int threshold = start_only && opt.start_only_threshold > 0
+                                              ? opt.start_only_threshold
+                                              : opt.threshold;
                         group_result = or_reduce( group_result,
-                                                  snapshot_.meets( key, opt.threshold )
+                                                  snapshot_.meets( key, threshold )
                                                   ? crafting_requirement_result::satisfied
                                                   : crafting_requirement_result::unsatisfied );
                     }
@@ -949,6 +1018,7 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
     // never enter the accumulator map and cache unknown for all modes.
     struct plan_state {
         std::vector<std::vector<crafting_requirement_result>> groups;
+        std::vector<std::vector<crafting_requirement_result>> start_only_groups;
     };
     std::map<recipe_id, std::array<plan_state, menu_filter_mode_count>> states;
     const std::vector<recipe_id> ids = index.recipe_ids();
@@ -974,9 +1044,13 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
         std::array<plan_state, menu_filter_mode_count> &st = states[id];
         for( plan_state &ps : st ) {
             ps.groups.resize( plan->alternatives.size() );
+            ps.start_only_groups.resize( plan->alternatives.size() );
             for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {
                 ps.groups[a].assign( plan->alternatives[a].size(),
                                      crafting_requirement_result::unsatisfied );
+                ps.start_only_groups[a].assign(
+                    plan->alternatives[a].size(),
+                    crafting_requirement_result::unsatisfied );
             }
         }
     }
@@ -1005,6 +1079,12 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
                 : ( edge.threshold <= highest_crossed
                     ? crafting_requirement_result::satisfied
                     : crafting_requirement_result::unsatisfied );
+            const crafting_requirement_result start_only_option_state =
+                ( wildcard || !exact )
+                ? crafting_requirement_result::unknown
+                : ( edge.start_only_threshold <= count
+                    ? crafting_requirement_result::satisfied
+                    : crafting_requirement_result::unsatisfied );
             // Component facts are filter-profile specific: only the edge's
             // own menu mode is touched. Tool/quality facts are unfiltered
             // and broadcast to all menu modes.
@@ -1027,6 +1107,12 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
                 }
                 grp[static_cast<std::size_t>( edge.group )] =
                     or_reduce( grp[static_cast<std::size_t>( edge.group )], option_state );
+                std::vector<crafting_requirement_result> &start_only_grp =
+                    it->second[static_cast<std::size_t>( m )]
+                    .start_only_groups[static_cast<std::size_t>( edge.alternative )];
+                start_only_grp[static_cast<std::size_t>( edge.group )] =
+                    or_reduce( start_only_grp[static_cast<std::size_t>( edge.group )],
+                               start_only_option_state );
             }
         }
     }
@@ -1035,42 +1121,53 @@ crafting_requirement_result_cache::crafting_requirement_result_cache(
     // OR -> recipe, exactly as the direct evaluator does.
     for( const recipe_id &id : ids ) {
         std::array<crafting_requirement_result, menu_filter_mode_count> res;
+        std::array<crafting_requirement_result, menu_filter_mode_count> start_only_res;
         res.fill( crafting_requirement_result::unknown );
+        start_only_res.fill( crafting_requirement_result::unknown );
         auto it = states.find( id );
         if( it != states.end() ) {
             const crafting_requirement_plan *plan = index.plan_for( id );
             for( int m = 0; m < menu_filter_mode_count; ++m ) {
                 const std::vector<std::vector<crafting_requirement_result>> &groups =
                             it->second[static_cast<std::size_t>( m )].groups;
-                crafting_requirement_result mode_result =
-                    crafting_requirement_result::unsatisfied;
-                for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {
-                    const crafting_requirement_alternative &alt = plan->alternatives[a];
-                    crafting_requirement_result alt_result =
-                        alt.empty()
-                        ? crafting_requirement_result::satisfied
-                        : allocation_guard( alt );
-                    if( alt_result != crafting_requirement_result::unknown ) {
-                        for( std::size_t g = 0; g < alt.size(); ++g ) {
-                            const crafting_requirement_result group_result =
-                                alt[g].options.empty()
-                                ? crafting_requirement_result::unknown
-                                : groups[a][g];
-                            alt_result = and_reduce( alt_result, group_result );
-                            if( alt_result == crafting_requirement_result::unsatisfied ) {
-                                break;
+                const std::vector<std::vector<crafting_requirement_result>> &start_only_groups =
+                            it->second[static_cast<std::size_t>( m )].start_only_groups;
+                const auto reduce_groups = [&](
+                const std::vector<std::vector<crafting_requirement_result>> &group_states ) {
+                    crafting_requirement_result mode_result =
+                        crafting_requirement_result::unsatisfied;
+                    for( std::size_t a = 0; a < plan->alternatives.size(); ++a ) {
+                        const crafting_requirement_alternative &alt = plan->alternatives[a];
+                        crafting_requirement_result alt_result =
+                            alt.empty()
+                            ? crafting_requirement_result::satisfied
+                            : allocation_guard( alt );
+                        if( alt_result != crafting_requirement_result::unknown ) {
+                            for( std::size_t g = 0; g < alt.size(); ++g ) {
+                                const crafting_requirement_result group_result =
+                                    alt[g].options.empty()
+                                    ? crafting_requirement_result::unknown
+                                    : group_states[a][g];
+                                alt_result = and_reduce( alt_result, group_result );
+                                if( alt_result == crafting_requirement_result::unsatisfied ) {
+                                    break;
+                                }
                             }
                         }
+                        mode_result = or_reduce( mode_result, alt_result );
+                        if( mode_result == crafting_requirement_result::satisfied ) {
+                            break;
+                        }
                     }
-                    mode_result = or_reduce( mode_result, alt_result );
-                    if( mode_result == crafting_requirement_result::satisfied ) {
-                        break;
-                    }
-                }
-                res[static_cast<std::size_t>( m )] = mode_result;
+                    return mode_result;
+                };
+                res[static_cast<std::size_t>( m )] = reduce_groups( groups );
+                start_only_res[static_cast<std::size_t>( m )] =
+                    reduce_groups( start_only_groups );
             }
         }
         results_.emplace( id, res );
+        start_only_results_.emplace( id, start_only_res );
     }
 }
 
@@ -1083,6 +1180,20 @@ crafting_requirement_result crafting_requirement_result_cache::evaluate(
     }
     auto it = results_.find( recipe_id );
     if( it == results_.end() ) {
+        return crafting_requirement_result::unknown;
+    }
+    return it->second[static_cast<std::size_t>( menu_index )];
+}
+
+crafting_requirement_result crafting_requirement_result_cache::evaluate_start_only(
+    const recipe_id &recipe_id, menu_filter_mode menu ) const
+{
+    const int menu_index = static_cast<int>( menu );
+    if( menu_index < 0 || menu_index >= menu_filter_mode_count ) {
+        return crafting_requirement_result::unknown;
+    }
+    auto it = start_only_results_.find( recipe_id );
+    if( it == start_only_results_.end() ) {
         return crafting_requirement_result::unknown;
     }
     return it->second[static_cast<std::size_t>( menu_index )];

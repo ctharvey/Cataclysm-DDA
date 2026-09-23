@@ -12,6 +12,7 @@
 #include "inventory.h"
 #include "item.h"
 #include "itype.h"
+#include "pocket_type.h"
 #include "recipe.h"
 #include "recipe_dictionary.h"
 #include "requirements.h"
@@ -580,6 +581,24 @@ TEST_CASE( "crafting_requirement_index_malformed_plan_atomic_rejection", "[craft
     bad_negative.alternatives.push_back( { make_group( group_kind::component,
         { make_option( "extra", -4 ) } ) } );
     rejection_leaves_index_intact( bad_negative, "negative threshold" );
+
+    crafting_requirement_option bad_start = make_option(
+            "extra", 20, fact_kind::tool_charges );
+    bad_start.start_only_threshold = 21;
+    crafting_requirement_plan bad_start_plan;
+    bad_start_plan.alternatives.push_back( { make_group( group_kind::tool,
+        { bad_start } ) } );
+    rejection_leaves_index_intact( bad_start_plan, "start threshold exceeds full threshold" );
+
+    bad_start.start_only_threshold = -1;
+    bad_start_plan.alternatives[0][0].options[0] = bad_start;
+    rejection_leaves_index_intact( bad_start_plan, "negative start threshold" );
+
+    bad_start = make_option( "extra", 20 );
+    bad_start.start_only_threshold = 19;
+    bad_start_plan.alternatives[0][0] = make_group( group_kind::component,
+    { bad_start } );
+    rejection_leaves_index_intact( bad_start_plan, "start threshold on component" );
 
     // Option kind does not match its group kind.
     crafting_requirement_plan bad_kind;
@@ -1207,6 +1226,11 @@ TEST_CASE( "requirement_index_loaded_dictionary_translation_normalization", "[cr
                             CHECK( opt.threshold > 0 );
                             CHECK( opt.threshold %
                                    tool_type->charge_factor() == 0 );
+                            const int expected_start = tool_type->tool
+                                                       ? std::min( opt.threshold,
+                                                                   opt.threshold / 20 + 19 )
+                                                       : opt.threshold;
+                            CHECK( opt.start_only_threshold == expected_start );
                             saw_tool_charges = true;
                             break;
                         }
@@ -1531,6 +1555,181 @@ TEST_CASE( "crafting_inventory_snapshot_broken_items_are_excluded",
     CHECK( snap.count_for( make_key( "stick", fact_kind::tool_instances ) ) == 0 );
 }
 
+TEST_CASE( "crafting_inventory_snapshot_digital_items_use_legacy_visibility",
+           "[crafting][requirement_index][inventory_parity]" )
+{
+    const bool software = GENERATE( false, true );
+    const bool broken = GENERATE( false, true );
+    const itype_id stored_type( software ? "software_hacking" : "SICP" );
+    item laptop( itype_id( "laptop" ) );
+    laptop.ammo_set( itype_id( "battery" ), 200 );
+    REQUIRE( laptop.put_in( item( stored_type ), pocket_type::E_FILE_STORAGE ).success() );
+    if( broken ) {
+        laptop.set_flag( flag_ITEM_BROKEN );
+    }
+    inventory inv;
+    inv.add_item( laptop );
+
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::tool,
+        { make_option( stored_type.str(), 1, fact_kind::tool_instances ) } ) } );
+    const recipe_id id = rid( "stored_digital_tool" );
+    REQUIRE( index.add_recipe( id, plan, uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+    const crafting_inventory_snapshot snapshot( index, inv );
+    const crafting_requirement_evaluator evaluator( index, snapshot );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    const bool visible = software || !broken;
+    const bool legacy = inv.has_tools( stored_type, 1 );
+    CAPTURE( software, broken );
+    REQUIRE( legacy == visible );
+    const crafting_requirement_result expected = visible
+            ? crafting_requirement_result::unknown : crafting_requirement_result::unsatisfied;
+    for( const menu_mode menu : {
+             menu_mode::normal, menu_mode::no_rotten, menu_mode::no_favorite
+         } ) {
+        CHECK( evaluator.evaluate( id, menu ) == expected );
+        CHECK( evaluator.evaluate_start_only( id, menu ) == expected );
+        CHECK( cache.evaluate( id, menu ) == expected );
+        CHECK( cache.evaluate_start_only( id, menu ) == expected );
+    }
+
+    if( software && !broken ) {
+        const recipe_id practice_id( "prac_computer_adv" );
+        const recipe &rec = practice_id.obj();
+        const crafting_requirement_index &loaded_index = recipe_dict.requirement_index();
+        const crafting_inventory_snapshot loaded_snapshot( loaded_index, inv );
+        const crafting_requirement_result_cache loaded_cache( loaded_index, loaded_snapshot );
+        REQUIRE( rec.deduped_requirements().can_make_with_inventory(
+                     nullptr, inv, rec.get_component_filter(), 1, craft_flags::start_only ) );
+        CHECK( loaded_cache.evaluate_start_only( rec.ident(), menu_mode::normal ) ==
+               crafting_requirement_result::unknown );
+    }
+}
+
+TEST_CASE( "crafting_inventory_snapshot_faults_preserve_count_and_charge_rules",
+           "[crafting][requirement_index][inventory_parity]" )
+{
+    const bool broken_flag = GENERATE( false, true );
+    item phone( itype_id( "smart_phone" ) );
+    phone.ammo_set( itype_id( "battery" ), 100 );
+    phone.is_favorite = true;
+    phone.faults.insert( fault_id( "fault_electronic_blown_fuse" ) );
+    if( broken_flag ) {
+        phone.set_flag( flag_ITEM_BROKEN );
+    }
+    REQUIRE( phone.is_broken() );
+    inventory inv;
+    inv.add_item( phone );
+
+    crafting_requirement_index index;
+    for( const fact_kind kind : {
+             fact_kind::component_units, fact_kind::tool_instances,
+             fact_kind::tool_charges
+         } ) {
+        crafting_requirement_plan plan;
+        plan.alternatives.push_back( { make_group(
+                                           kind == fact_kind::component_units ? group_kind::component : group_kind::tool,
+        { make_option( "smart_phone", 1, kind ) } ) } );
+        const recipe_id id( "fault_phone_" + std::to_string( static_cast<int>( kind ) ) );
+        REQUIRE( index.add_recipe( id, plan, make_profiles( recipe_filter_none,
+                                   recipe_filter_rotten_forbidden, recipe_filter_favorite_forbidden ) ) );
+    }
+    index.finalize();
+    const crafting_inventory_snapshot snapshot( index, inv );
+    const crafting_requirement_evaluator evaluator( index, snapshot );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    for( const fact_kind kind : {
+             fact_kind::component_units, fact_kind::tool_instances,
+             fact_kind::tool_charges
+         } ) {
+        const recipe_id id( "fault_phone_" + std::to_string( static_cast<int>( kind ) ) );
+        for( const menu_mode menu : {
+                 menu_mode::normal, menu_mode::no_rotten, menu_mode::no_favorite
+             } ) {
+            const auto filter = [menu]( const item & it ) {
+                return is_crafting_component( it ) &&
+                       ( menu != menu_mode::no_favorite || !it.is_favorite );
+            };
+            const bool legacy = kind == fact_kind::component_units
+                                ? inv.has_components( phone.typeId(), 1, filter )
+                                : kind == fact_kind::tool_instances
+                                ? inv.has_tools( phone.typeId(), 1 )
+                                : inv.has_charges( phone.typeId(), 1 );
+            const crafting_requirement_result expected = legacy
+                    ? crafting_requirement_result::satisfied : crafting_requirement_result::unsatisfied;
+            CAPTURE( broken_flag, static_cast<int>( kind ), static_cast<int>( menu ) );
+            CHECK( legacy == ( !broken_flag && kind != fact_kind::tool_charges &&
+                               ( kind != fact_kind::component_units || menu != menu_mode::no_favorite ) ) );
+            CHECK( evaluator.evaluate( id, menu ) == expected );
+            CHECK( evaluator.evaluate_start_only( id, menu ) == expected );
+            CHECK( cache.evaluate( id, menu ) == expected );
+            CHECK( cache.evaluate_start_only( id, menu ) == expected );
+        }
+    }
+}
+
+TEST_CASE( "crafting_inventory_snapshot_same_type_nesting_preserves_legacy_recipes",
+           "[crafting][requirement_index][inventory_parity]" )
+{
+    // Loose bags, sibling bags, same-type nesting, and a repeated grandparent type.
+    const int layout = GENERATE( 0, 1, 2, 3 );
+    inventory inv;
+    if( layout == 0 ) {
+        for( int i = 0; i < 6; ++i ) {
+            inv.add_item( item( itype_id( "bag_plastic" ) ) );
+        }
+    } else {
+        item outer( itype_id( layout == 1 ? "backpack" : "bag_plastic" ) );
+        item contents( itype_id( "bag_plastic_small" ) );
+        item &parent = layout == 3 ? contents : outer;
+        for( int i = 0; i < ( layout == 1 ? 6 : 5 ); ++i ) {
+            REQUIRE( parent.put_in( item( itype_id( "bag_plastic" ) ),
+                                    pocket_type::CONTAINER ).success() );
+        }
+        if( layout == 3 ) {
+            REQUIRE( outer.put_in( contents, pocket_type::CONTAINER ).success() );
+        }
+        inv.add_item( outer );
+    }
+    item hotplate( itype_id( "hotplate" ) );
+    hotplate.charges = 200;
+    inv.add_item( hotplate );
+    inv.add_item( item( itype_id( "pot" ) ) );
+
+    const recipe_id plastic_id( "plastic_chunk_from_plastic_bags" );
+    const recipe &rec = plastic_id.obj();
+    const crafting_requirement_index &index = recipe_dict.requirement_index();
+    const crafting_inventory_snapshot snapshot( index, inv );
+    const crafting_requirement_evaluator evaluator( index, snapshot );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    const bool repeated_type = layout >= 2;
+    CAPTURE( layout );
+    CHECK( inv.amount_of( itype_id( "bag_plastic" ) ) == ( repeated_type ? 11 : 6 ) );
+    CHECK( snapshot.is_exact( make_key( "bag_plastic" ) ) == !repeated_type );
+    CHECK( snapshot.is_exact( make_key( "hotplate", fact_kind::tool_charges ) ) );
+    const std::array<recipe_filter_flags, menu_filter_mode_count> filters = { {
+            recipe_filter_flags::none, recipe_filter_flags::no_rotten, recipe_filter_flags::no_favorite
+        }
+    };
+    for( int m = 0; m < menu_filter_mode_count; ++m ) {
+        const menu_mode menu = static_cast<menu_mode>( m );
+        const crafting_requirement_result expected = repeated_type
+                ? crafting_requirement_result::unknown : crafting_requirement_result::unsatisfied;
+        CHECK( evaluator.evaluate( rec.ident(), menu ) == expected );
+        CHECK( evaluator.evaluate_start_only( rec.ident(), menu ) == expected );
+        CHECK( cache.evaluate( rec.ident(), menu ) == expected );
+        CHECK( cache.evaluate_start_only( rec.ident(), menu ) == expected );
+        for( const craft_flags flags : {
+                 craft_flags::none, craft_flags::start_only
+             } ) {
+            CHECK( rec.deduped_requirements().can_make_with_inventory(
+                       nullptr, inv, rec.get_component_filter( filters[m] ), 1, flags ) == repeated_type );
+        }
+    }
+}
+
 TEST_CASE( "crafting_inventory_snapshot_rotten_profile_rejects_rotten",
            "[crafting][requirement_index]" )
 {
@@ -1627,6 +1826,99 @@ TEST_CASE( "crafting_inventory_snapshot_ups_tool_charges_is_inexact_and_unsuppor
     CHECK_FALSE( snap.is_exact( solder ) );
     CHECK( snap.inexact_fact_count() == 1 );
     CHECK( snap.unsupported_fact_count() == 1 );
+    const crafting_requirement_evaluator evaluator( index, snap );
+    const crafting_requirement_result_cache cache( index, snap );
+    CHECK( evaluator.evaluate_start_only( rid( "ups_solder_recipe" ),
+                                          menu_mode::normal ) == crafting_requirement_result::unknown );
+    CHECK( cache.evaluate_start_only( rid( "ups_solder_recipe" ),
+                                      menu_mode::normal ) == crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_ups_alias_is_inexact",
+           "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::tool,
+        { make_option( "UPS", 20, fact_kind::tool_charges ) } ) } );
+    REQUIRE( index.add_recipe( rid( "ups_alias_recipe" ), plan,
+                               uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    inventory inv;
+    const crafting_inventory_snapshot snapshot( index, inv );
+    const crafting_requirement_fact_key ups = make_key( "UPS", fact_kind::tool_charges );
+    CHECK_FALSE( snapshot.is_exact( ups ) );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    CHECK( cache.evaluate_start_only( rid( "ups_alias_recipe" ),
+                                      menu_mode::normal ) == crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "crafting_inventory_snapshot_linked_tool_charges_are_inexact",
+           "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::tool,
+        { make_option( "electric_blanket", 20, fact_kind::tool_charges ) } ) } );
+    REQUIRE( index.add_recipe( rid( "linked_blanket_recipe" ), plan,
+                               uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    item blanket( itype_id( "electric_blanket" ) );
+    REQUIRE( blanket.can_link_up() );
+    blanket.link();
+    inventory inv;
+    inv.add_item( blanket );
+    const crafting_inventory_snapshot snapshot( index, inv );
+    CHECK_FALSE( snapshot.is_exact( make_key( "electric_blanket",
+                                    fact_kind::tool_charges ) ) );
+    const crafting_requirement_result_cache cache( index, snapshot );
+    CHECK( cache.evaluate_start_only( rid( "linked_blanket_recipe" ),
+                                      menu_mode::normal ) == crafting_requirement_result::unknown );
+}
+
+TEST_CASE( "crafting_tool_charge_start_only_cache_matches_legacy_thresholds",
+           "[crafting][requirement_index]" )
+{
+    crafting_requirement_index index;
+    crafting_requirement_option charged = make_option(
+            "soldering_iron", 100, fact_kind::tool_charges );
+    charged.start_only_threshold = 24;
+    crafting_requirement_plan plan;
+    plan.alternatives.push_back( { make_group( group_kind::tool, { charged } ) } );
+    REQUIRE( index.add_recipe( rid( "start_only_solder" ), plan,
+                               uniform_profiles( recipe_filter_none ) ) );
+    index.finalize();
+
+    for( int charges : {
+             0, 23, 24, 99, 100
+         } ) {
+        inventory inv;
+        item tool( itype_id( "soldering_iron" ) );
+        tool.charges = charges;
+        inv.add_item( tool );
+        const crafting_inventory_snapshot snapshot( index, inv );
+        const crafting_requirement_evaluator evaluator( index, snapshot );
+        const crafting_requirement_result_cache cache( index, snapshot );
+        const crafting_requirement_result expected_start = charges >= 24
+                ? crafting_requirement_result::satisfied
+                : crafting_requirement_result::unsatisfied;
+        const crafting_requirement_result expected_full = charges >= 100
+                ? crafting_requirement_result::satisfied
+                : crafting_requirement_result::unsatisfied;
+        CAPTURE( charges );
+        CHECK( evaluator.evaluate_start_only( rid( "start_only_solder" ),
+                                              menu_mode::normal ) == expected_start );
+        CHECK( cache.evaluate_start_only( rid( "start_only_solder" ),
+                                          menu_mode::normal ) == expected_start );
+        CHECK( evaluator.evaluate( rid( "start_only_solder" ),
+                                   menu_mode::normal ) == expected_full );
+        CHECK( cache.evaluate( rid( "start_only_solder" ),
+                               menu_mode::normal ) == expected_full );
+        CHECK( ( inv.charges_of( itype_id( "soldering_iron" ), 24 ) == 24 ) ==
+               ( expected_start == crafting_requirement_result::satisfied ) );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2052,6 +2344,7 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
     std::array<std::size_t, menu_filter_mode_count> exact_unsat = {};
     std::size_t unknown_count = 0;
     std::size_t exact_comparisons = 0;
+    std::size_t start_only_exact_comparisons = 0;
 
     for( const auto &e : recipe_dict ) {
         const recipe_id &id = e.first;
@@ -2072,6 +2365,20 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
                 INFO( "menu: " << menu_names[m] );
                 INFO( "inventory: " << cases[ci].label );
                 CHECK( caches[ci].evaluate( id, menus[m] ) == result );
+                const crafting_requirement_result start_only_result =
+                    eval.evaluate_start_only( id, menus[m] );
+                CHECK( caches[ci].evaluate_start_only( id, menus[m] ) ==
+                       start_only_result );
+                if( start_only_result != crafting_requirement_result::unknown ) {
+                    const bool legacy_start =
+                        r.deduped_requirements().can_make_with_inventory(
+                            nullptr, cases[ci].inv,
+                            r.get_component_filter( menu_flags[m] ),
+                            1, craft_flags::start_only );
+                    CHECK( ( start_only_result == crafting_requirement_result::satisfied ) ==
+                           legacy_start );
+                    ++start_only_exact_comparisons;
+                }
                 if( result == crafting_requirement_result::unknown ) {
                     // Unknown results are counted but never compared: the
                     // legacy path is the mandatory fallback there.
@@ -2108,8 +2415,10 @@ TEST_CASE( "phase3b_loaded_recipe_equivalence_matrix", "[crafting][requirement_i
     CAPTURE( exact_unsatisfied );
     CAPTURE( unknown_count );
     CAPTURE( exact_comparisons );
+    CAPTURE( start_only_exact_comparisons );
     // The matrix must actually compare something.
     REQUIRE( exact_comparisons > 0 );
+    REQUIRE( start_only_exact_comparisons > 0 );
 }
 
 // ---------------------------------------------------------------------------

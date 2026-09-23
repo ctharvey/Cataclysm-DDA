@@ -47,27 +47,6 @@
 
 static const trait_id trait_DEBUG_HS( "DEBUG_HS" );
 
-// Conservative guard: true if any option in the recipe's indexed plan counts
-// tool charges.  Noncamp availability uses craft_flags::start_only while the
-// graph models full tool charges, so such recipes must bypass the cache.
-static bool plan_has_tool_charges( const recipe_id &id )
-{
-    const crafting_requirement_plan *plan = recipe_dict.requirement_index().plan_for( id );
-    if( plan == nullptr ) {
-        return false;
-    }
-    for( const crafting_requirement_alternative &alt : plan->alternatives ) {
-        for( const crafting_requirement_group &group : alt ) {
-            for( const crafting_requirement_option &opt : group.options ) {
-                if( opt.kind == crafting_requirement_fact_kind::tool_charges ) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 bool cannot_gain_skill_or_prof( const Character &crafter, const recipe &recp )
 {
     if( recp.skill_used &&
@@ -131,6 +110,15 @@ float availability::get_max_proficiency_skill_maluses() const
 availability::availability( Character &_crafter, const recipe *recp, int batch_size,
                             bool camp_crafting, inventory *inventory_override,
                             const crafting_requirement_result_cache *requirement_cache ) :
+    availability( _crafter, recp, batch_size, camp_crafting, inventory_override,
+                  requirement_cache, nullptr )
+{
+}
+
+availability::availability( Character &_crafter, const recipe *recp, int batch_size,
+                            bool camp_crafting, inventory *inventory_override,
+                            const crafting_requirement_result_cache *requirement_cache,
+                            const nested_availability_resolver *nested_resolver ) :
     crafter( _crafter ), batch_size_( batch_size ), camp_crafting_( camp_crafting )
 {
 #if defined(CATA_CRAFTING_PROFILE)
@@ -154,8 +142,7 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
         !camp_crafting &&
         batch_size == 1 &&
         !is_nested &&
-        !( crafter.has_trait( trait_DEBUG_HS ) ) &&
-        !plan_has_tool_charges( recp->ident() );
+        !( crafter.has_trait( trait_DEBUG_HS ) );
 
     // Crafter can craft and has the needed skills for it
     if( recp->skill_used.is_null() ) {
@@ -189,14 +176,16 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
         can_craft_recipe = false;
     } else if( is_nested ) {
         can_craft_recipe = check_can_craft_nested( _crafter, *recp,
-                           camp_crafting ? nullptr : requirement_cache );
+                           camp_crafting ? nullptr : requirement_cache,
+                           camp_crafting ? nullptr : nested_resolver );
     } else {
         const auto all_items_filter = recp->get_component_filter( recipe_filter_flags::none );
         // I dont like it since we call functions on functions which is bad practice...
         // But not worth a rework right now...
         if( use_cache ) {
             const crafting_requirement_result cached =
-                requirement_cache->evaluate( recp->ident(), menu_filter_mode::normal );
+                requirement_cache->evaluate_start_only(
+                    recp->ident(), menu_filter_mode::normal );
             if( cached != crafting_requirement_result::unknown ) {
                 can_craft_recipe = cached == crafting_requirement_result::satisfied;
             } else {
@@ -229,7 +218,8 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
 
         if( use_cache ) {
             const crafting_requirement_result rotten_result =
-                requirement_cache->evaluate( recp->ident(), menu_filter_mode::no_rotten );
+                requirement_cache->evaluate_start_only(
+                    recp->ident(), menu_filter_mode::no_rotten );
             would_use_rotten =
                 rotten_result == crafting_requirement_result::unknown ?
                 !req_data.can_make_with_inventory(
@@ -242,7 +232,8 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
 #endif
 
             const crafting_requirement_result favorite_result =
-                requirement_cache->evaluate( recp->ident(), menu_filter_mode::no_favorite );
+                requirement_cache->evaluate_start_only(
+                    recp->ident(), menu_filter_mode::no_favorite );
             would_use_favorite =
                 favorite_result == crafting_requirement_result::unknown ?
                 !req_data.can_make_with_inventory(
@@ -399,8 +390,17 @@ nc_color availability::color( bool ignore_missing_skills ) const
 bool availability::check_can_craft_nested( Character &_crafter, const recipe &r,
         const crafting_requirement_result_cache *requirement_cache )
 {
+    return check_can_craft_nested( _crafter, r, requirement_cache, nullptr );
+}
+
+bool availability::check_can_craft_nested( Character &_crafter, const recipe &r,
+        const crafting_requirement_result_cache *requirement_cache,
+        const nested_availability_resolver *nested_resolver )
+{
     for( const recipe_id &nested_r : r.nested_category_data ) {
-        if( availability( _crafter, &nested_r.obj(), 1, false, nullptr,
+        const recipe *nested_recipe = &nested_r.obj();
+        if( nested_resolver != nullptr ? ( *nested_resolver )( nested_recipe ) :
+            availability( _crafter, nested_recipe, 1, false, nullptr,
                           requirement_cache ).can_craft_recipe ) {
             return true;
         }
@@ -1124,7 +1124,8 @@ static void recursively_expand_recipes( std::vector<const recipe *> &current,
                                         Character &crafter, bool unread_recipes_first, bool highlight_unread_recipes,
                                         const recipe_subset &available_recipes, const std::set<recipe_id> &hidden_recipes,
                                         bool camp_crafting, inventory *inventory_override,
-                                        const crafting_requirement_result_cache *requirement_cache )
+                                        const crafting_requirement_result_cache *requirement_cache,
+                                        const nested_availability_resolver *nested_resolver )
 {
     std::vector<const recipe *> tmp;
     for( const recipe_id &nested : current[i]->nested_category_data ) {
@@ -1135,9 +1136,13 @@ static void recursively_expand_recipes( std::vector<const recipe *> &current,
             tmp.push_back( &nested.obj() );
             indent.insert( indent.begin() + i + 1, indent[i] + 2 );
             if( !availability_cache.count( &nested.obj() ) ) {
-                availability_cache.emplace( &nested.obj(),
-                                            availability( crafter, &nested.obj(), 1,
-                                                    camp_crafting, inventory_override, requirement_cache ) );
+                if( nested_resolver != nullptr ) {
+                    ( *nested_resolver )( &nested.obj() );
+                } else {
+                    availability_cache.emplace( &nested.obj(),
+                                                availability( crafter, &nested.obj(), 1,
+                                                        camp_crafting, inventory_override, requirement_cache ) );
+                }
             }
         }
     }
@@ -1164,7 +1169,8 @@ static void expand_recipes( std::vector<const recipe *> &current,
                             Character &crafter, bool unread_recipes_first, bool highlight_unread_recipes,
                             const recipe_subset &available_recipes, const std::set<recipe_id> &hidden_recipes,
                             bool camp_crafting, inventory *inventory_override,
-                            const crafting_requirement_result_cache *requirement_cache )
+                            const crafting_requirement_result_cache *requirement_cache,
+                            const nested_availability_resolver *nested_resolver )
 {
     for( size_t i = 0; i < current.size(); ++i ) {
         if( current[i]->is_nested()
@@ -1172,7 +1178,8 @@ static void expand_recipes( std::vector<const recipe *> &current,
           ) {
             recursively_expand_recipes( current, indent, availability_cache, i, crafter,
                                         unread_recipes_first, highlight_unread_recipes, available_recipes,
-                                        hidden_recipes, camp_crafting, inventory_override, requirement_cache );
+                                        hidden_recipes, camp_crafting, inventory_override, requirement_cache,
+                                        nested_resolver );
         }
     }
 }
@@ -1248,14 +1255,42 @@ recipe_list_data build_recipe_list(
 #if defined(CATA_CRAFTING_PROFILE)
     size_t availability_computed = 0;
 #endif
-    for( const recipe *e : result.entries ) {
-        if( !availability_cache.count( e ) ) {
-            availability_cache.emplace( e,
-                                        availability( crafter, e, 1, camp_crafting, inventory_override,
-                                                requirement_cache ) );
+    std::set<const recipe *> availability_in_progress;
+    nested_availability_resolver nested_resolver;
+    if( !camp_crafting ) {
+        nested_resolver = [&]( const recipe * rec ) {
+            const auto cached = availability_cache.find( rec );
+            if( cached != availability_cache.end() ) {
+                return cached->second.can_craft_recipe;
+            }
+            if( !availability_in_progress.insert( rec ).second ) {
+                return false;
+            }
+
+            availability computed( crafter, rec, 1, false, nullptr,
+                                   requirement_cache, &nested_resolver );
+            const bool can_craft = computed.can_craft_recipe;
+            availability_cache.emplace( rec, std::move( computed ) );
+            availability_in_progress.erase( rec );
 #if defined(CATA_CRAFTING_PROFILE)
             ++availability_computed;
 #endif
+            return can_craft;
+        };
+    }
+
+    for( const recipe *e : result.entries ) {
+        if( !availability_cache.count( e ) ) {
+            if( camp_crafting ) {
+                availability_cache.emplace( e,
+                                            availability( crafter, e, 1, true, inventory_override,
+                                                    requirement_cache ) );
+#if defined(CATA_CRAFTING_PROFILE)
+                ++availability_computed;
+#endif
+            } else {
+                nested_resolver( e );
+            }
         }
     }
 #if defined(CATA_CRAFTING_PROFILE)
@@ -1283,7 +1318,8 @@ recipe_list_data build_recipe_list(
     result.indent.assign( result.entries.size(), 0 );
     expand_recipes( result.entries, result.indent, availability_cache, crafter,
                     unread_first, highlight_unread, available_recipes, uistate.hidden_recipes,
-                    camp_crafting, inventory_override, requirement_cache );
+                    camp_crafting, inventory_override, requirement_cache,
+                    camp_crafting ? nullptr : &nested_resolver );
 #if defined(CATA_CRAFTING_PROFILE)
     const auto expand_end = std::chrono::steady_clock::now();
 #endif

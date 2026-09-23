@@ -1372,7 +1372,9 @@ TEST_CASE( "crafting_category_pipeline_benchmark",
         if( rec->is_nested() ) {
             ++nested_bypass_count;
         }
-        if( recipe_plan_has_tool_charges( index, rec->ident() ) ) {
+        if( recipe_plan_has_tool_charges( index, rec->ident() ) &&
+            requirement_cache.evaluate_start_only( rec->ident(), menu_mode::normal ) ==
+            crafting_requirement_result::unknown ) {
             ++tool_charge_bypass_count;
         }
         for( std::size_t mode = 0; mode < matrix_menu_count; ++mode ) {
