@@ -2,17 +2,22 @@
 # then explicitly keep the ones that are part of the tree.
 /.*
 !/.astylerc
+!/.agent/
+!/.clinerules
 !/.clang-tidy
 !/.cmake-format.yml
+!/.cursorrules
 !/.devcontainer/
 !/.editorconfig
 !/.flake8
 !/.gitattributes
+!/.githooks/
 !/.github/
 !/.gitignore
 !/.gitmessage
 !/.tx/
 !/.vscode/
+!/.windsurfrules
 /.vscode/**
 !/.vscode/settings.json
 !/.vscode/extensions.json
