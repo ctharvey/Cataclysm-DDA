@@ -150,6 +150,13 @@ OTHERS += -fsigned-char
 
 VERSION = 0.J
 
+ifeq ($(CRAFTING_PROFILE),1)
+  DEFINES += -DCATA_CRAFTING_PROFILE
+  ifeq ($(BUILD_PREFIX),)
+    BUILD_PREFIX = crafting-profile-
+  endif
+endif
+
 TARGET_NAME = cataclysm
 TILES_TARGET_NAME = $(TARGET_NAME)-tiles
 ifeq ($(NATIVE), emscripten)

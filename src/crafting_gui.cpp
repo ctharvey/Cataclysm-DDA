@@ -32,6 +32,9 @@
 #include "crafting_enums.h"
 #include "crafting_gui_helpers.h"
 #include "crafting_requirement_index.h"
+#if defined(CATA_CRAFTING_PROFILE)
+#include "debug.h"
+#endif
 #include "display.h"
 #include "flag.h"
 #include "flat_set.h"
@@ -2383,6 +2386,9 @@ void crafting_ui_impl::draw_keybinding_footer()
 
 void crafting_ui_impl::recalculate_recipes()
 {
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto profile_start = std::chrono::steady_clock::now();
+#endif
     recalc = false;
     const recipe *prev_rcp = nullptr;
     if( keepline && line >= 0 && static_cast<size_t>( line ) < current.size() ) {
@@ -2434,6 +2440,9 @@ void crafting_ui_impl::recalculate_recipes()
             skip_hidden = result.second;
             show_hidden = result.second;
         }
+#if defined(CATA_CRAFTING_PROFILE)
+        const auto selection_end = std::chrono::steady_clock::now();
+#endif
 
         const bool skip_sort = ( subtab.cur() == "CSC_*_RECENT" );
         num_recipe = picking.size();
@@ -2447,6 +2456,18 @@ void crafting_ui_impl::recalculate_recipes()
         indent_vec = std::move( list_result.indent );
         available = std::move( list_result.available );
         num_hidden = list_result.num_hidden;
+#if defined(CATA_CRAFTING_PROFILE)
+        const auto build_end = std::chrono::steady_clock::now();
+        const auto elapsed_ms = []( const auto begin, const auto end ) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>( end - begin ).count();
+        };
+        DebugLog( D_INFO, D_MAIN ) << "[crafting-profile] recalculate category=" << tab.cur()
+                                   << " subcategory=" << subtab.cur()
+                                   << " recipes=" << num_recipe
+                                   << " selection_ms=" << elapsed_ms( profile_start, selection_end )
+                                   << " build_ms=" << elapsed_ms( selection_end, build_end )
+                                   << " total_ms=" << elapsed_ms( profile_start, build_end );
+#endif
     }
 
     line = 0;

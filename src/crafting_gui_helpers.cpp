@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <bitset>
+#if defined(CATA_CRAFTING_PROFILE)
+#include <chrono>
+#endif
 #include <iterator>
 #include <map>
 #include <memory>
@@ -19,6 +22,9 @@
 #include "character.h"
 #include "crafting.h"
 #include "crafting_requirement_index.h"
+#if defined(CATA_CRAFTING_PROFILE)
+#include "debug.h"
+#endif
 #include "display.h"
 #include "flag.h"
 #include "game_constants.h"
@@ -127,10 +133,16 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
                             const crafting_requirement_result_cache *requirement_cache ) :
     crafter( _crafter ), batch_size_( batch_size ), camp_crafting_( camp_crafting )
 {
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto profile_start = std::chrono::steady_clock::now();
+#endif
     rec = recp;
     inv_override = inventory_override;
 
     const inventory &inv = camp_crafting ? *inv_override : crafter.crafting_inventory();
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto inventory_end = std::chrono::steady_clock::now();
+#endif
 
     const craft_flags flag = camp_crafting ? craft_flags::none : craft_flags::start_only;
 
@@ -169,6 +181,9 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
         !camp_crafting &&
         crafter.is_npc() &&
         !recp->npc_can_craft( npc_reason );
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto character_end = std::chrono::steady_clock::now();
+#endif
 
     if( npc_cannot_craft || !character_base_requirements ) {
         can_craft_recipe = false;
@@ -195,9 +210,16 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
                                );
         }
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto primary_end = std::chrono::steady_clock::now();
+#endif
 
     would_use_rotten = false;
     would_use_favorite = false;
+#if defined(CATA_CRAFTING_PROFILE)
+    auto rotten_end = primary_end;
+    auto favorite_end = primary_end;
+#endif
 
     if( can_craft_recipe && !is_nested ) {
         const deduped_requirement_data &req_data = recp->deduped_requirements();
@@ -215,6 +237,9 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
                     batch_size, flag
                 ) :
                 rotten_result == crafting_requirement_result::unsatisfied;
+#if defined(CATA_CRAFTING_PROFILE)
+            rotten_end = std::chrono::steady_clock::now();
+#endif
 
             const crafting_requirement_result favorite_result =
                 requirement_cache->evaluate( recp->ident(), menu_filter_mode::no_favorite );
@@ -225,18 +250,27 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
                     batch_size, flag
                 ) :
                 favorite_result == crafting_requirement_result::unsatisfied;
+#if defined(CATA_CRAFTING_PROFILE)
+            favorite_end = std::chrono::steady_clock::now();
+#endif
         } else {
             would_use_rotten =
                 !req_data.can_make_with_inventory(
                     &crafter, inv, no_rotten_filter,
                     batch_size, flag
                 );
+#if defined(CATA_CRAFTING_PROFILE)
+            rotten_end = std::chrono::steady_clock::now();
+#endif
 
             would_use_favorite =
                 !req_data.can_make_with_inventory(
                     &crafter, inv, no_favorite_filter,
                     batch_size, flag
                 );
+#if defined(CATA_CRAFTING_PROFILE)
+            favorite_end = std::chrono::steady_clock::now();
+#endif
         }
     }
 
@@ -265,6 +299,9 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
                 );
         }
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto apparent_end = std::chrono::steady_clock::now();
+#endif
 
     useless_practice = is_practice && cannot_gain_skill_or_prof( crafter, *recp );
     is_nested_category = is_nested;
@@ -276,6 +313,26 @@ availability::availability( Character &_crafter, const recipe *recp, int batch_s
             break;
         }
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto profile_end = std::chrono::steady_clock::now();
+    const auto elapsed_ms = []( const auto begin, const auto end ) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>( end - begin ).count();
+    };
+    const auto total_ms = elapsed_ms( profile_start, profile_end );
+    if( total_ms >= 20 ) {
+        DebugLog( D_INFO, D_MAIN ) << "[crafting-profile] availability recipe="
+                                   << recp->ident().str()
+                                   << " craftable=" << can_craft_recipe
+                                   << " inventory_ms=" << elapsed_ms( profile_start, inventory_end )
+                                   << " character_ms=" << elapsed_ms( inventory_end, character_end )
+                                   << " primary_ms=" << elapsed_ms( character_end, primary_end )
+                                   << " rotten_ms=" << elapsed_ms( primary_end, rotten_end )
+                                   << " favorite_ms=" << elapsed_ms( rotten_end, favorite_end )
+                                   << " apparent_ms=" << elapsed_ms( favorite_end, apparent_end )
+                                   << " finish_ms=" << elapsed_ms( apparent_end, profile_end )
+                                   << " total_ms=" << total_ms;
+    }
+#endif
 }
 
 bool availability::is_apparently_craftable() const
@@ -1153,6 +1210,10 @@ recipe_list_data build_recipe_list(
     const recipe_subset &available_recipes,
     const crafting_requirement_result_cache *requirement_cache )
 {
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto profile_start = std::chrono::steady_clock::now();
+    const size_t input_recipe_count = picking.size();
+#endif
     recipe_list_data result;
 
     if( skip_hidden_filter ) {
@@ -1179,15 +1240,27 @@ recipe_list_data build_recipe_list(
         }
         result.num_hidden = picking.size() - result.entries.size();
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto filter_end = std::chrono::steady_clock::now();
+#endif
 
     // Cache availability on first display
+#if defined(CATA_CRAFTING_PROFILE)
+    size_t availability_computed = 0;
+#endif
     for( const recipe *e : result.entries ) {
         if( !availability_cache.count( e ) ) {
             availability_cache.emplace( e,
                                         availability( crafter, e, 1, camp_crafting, inventory_override,
                                                 requirement_cache ) );
+#if defined(CATA_CRAFTING_PROFILE)
+            ++availability_computed;
+#endif
         }
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto availability_end = std::chrono::steady_clock::now();
+#endif
 
     if( !skip_sort ) {
         const bool want_unread = highlight_unread && unread_first;
@@ -1202,12 +1275,18 @@ recipe_list_data build_recipe_list(
                                         crafter, sort_ctx, a_read, b_read, want_unread );
         } );
     }
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto sort_end = std::chrono::steady_clock::now();
+#endif
 
     // Set up indents and expand nested categories (must happen after sort)
     result.indent.assign( result.entries.size(), 0 );
     expand_recipes( result.entries, result.indent, availability_cache, crafter,
                     unread_first, highlight_unread, available_recipes, uistate.hidden_recipes,
                     camp_crafting, inventory_override, requirement_cache );
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto expand_end = std::chrono::steady_clock::now();
+#endif
 
     // Build the parallel availability vector
     result.available.reserve( result.entries.size() );
@@ -1215,6 +1294,25 @@ recipe_list_data build_recipe_list(
     std::back_inserter( result.available ), [&]( const recipe * e ) {
         return availability_cache.at( e );
     } );
+
+#if defined(CATA_CRAFTING_PROFILE)
+    const auto profile_end = std::chrono::steady_clock::now();
+    const auto elapsed_ms = []( const auto begin, const auto end ) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>( end - begin ).count();
+    };
+    const auto total_ms = elapsed_ms( profile_start, profile_end );
+    if( total_ms >= 10 ) {
+        DebugLog( D_INFO, D_MAIN ) << "[crafting-profile] build_recipe_list input="
+                                   << input_recipe_count << " output=" << result.entries.size()
+                                   << " availability_computed=" << availability_computed
+                                   << " filter_ms=" << elapsed_ms( profile_start, filter_end )
+                                   << " availability_ms=" << elapsed_ms( filter_end, availability_end )
+                                   << " sort_ms=" << elapsed_ms( availability_end, sort_end )
+                                   << " expand_ms=" << elapsed_ms( sort_end, expand_end )
+                                   << " output_ms=" << elapsed_ms( expand_end, profile_end )
+                                   << " total_ms=" << total_ms;
+    }
+#endif
 
     return result;
 }
