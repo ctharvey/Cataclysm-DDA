@@ -29,13 +29,16 @@ file first, then open only the project documents relevant to the task.
 ## Crafting Harness
 
 The existing harness is a deterministic Catch2 runner for crafting-category correctness and
-performance. It is not native SDL pixel, focus, or input automation.
+performance. One invocation launches three fresh test processes to emulate opening crafting,
+selecting Armor, closing cleanly, and repeating from a cold process. It rejects semantic-count
+drift between runs and emits a schema-v2 aggregate with each run and median timings. It is not
+native SDL pixel, focus, or input automation.
 
 1. Build `tests/cata_test.exe` with the branch's crafting tests enabled.
 2. From this repository root, run `./tools/run_crafting_harness.ps1`.
 3. To retain a machine-readable result, pass
-   `-OutputPath ./crafting-harness-report.json`; the report includes the Git revision and whether
-   tracked files were dirty.
+   `-OutputPath ./crafting-harness-report.json`; the report includes the scenario name, three
+   per-process reports, median timings, the Git revision, and whether tracked files were dirty.
 
 Use an isolated `--user-dir` for native game launches. Keep manual observations separate from the
 deterministic harness result, and do not treat a successful harness run as SDL input/rendering

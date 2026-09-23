@@ -46,7 +46,8 @@ game behavior.
 - `src/crafting_requirement_index.*`: branch-specific index for requirement-driven candidate
   filtering.
 - `tests/crafting_*`: correctness, scenario, and performance coverage for the evaluated path.
-- `tools/run_crafting_harness.ps1`: repeatable local runner for crafting performance scenarios.
+- `tools/run_crafting_harness.ps1`: repeatable local runner that launches three fresh crafting
+  benchmark processes, verifies stable semantic counts, and aggregates cold/warm timings.
 
 ## Configuration / Environment Variables
 

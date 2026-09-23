@@ -1,5 +1,13 @@
 # Changelog — Cataclysm-DDA-crafting-eval
 
+## 2026-09-23 — Emulate the fresh-process Armor workflow
+
+- Changed the crafting harness to run the Armor pipeline in three independent test processes.
+- Added fail-closed semantic-count comparison across runs and a schema-v2 aggregate containing
+  per-run evidence plus median cold, warm, sorted, and expanded timings.
+- Kept the harness at the crafting logic boundary; native SDL input and rendering remain outside
+  its claimed coverage.
+
 ## 2026-09-23 — Remove the model name from the project
 
 - Renamed the linked worktree and project identity to `Cataclysm-DDA-crafting-eval`.
